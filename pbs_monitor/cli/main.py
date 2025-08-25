@@ -764,9 +764,9 @@ Examples:
       help="Start background data collection daemon"
    )
    daemon_start_parser.add_argument(
-      "--detach",
+      "--foreground", "-f",
       action="store_true",
-      help="Run daemon in background (detached mode)"
+      help="Run daemon in foreground (don't detach)"
    )
    daemon_start_parser.add_argument(
       "--pid-file",

@@ -1806,12 +1806,16 @@ class DaemonCommand(BaseCommand):
    
    def _write_daemon_info(self, pid_file: Path, pid: int) -> None:
       """Write daemon information to JSON PID file"""
+      current_time = datetime.now().isoformat()
       daemon_info = {
          "hostname": socket.gethostname(),
          "pid": pid,
-         "start_timestamp": datetime.now().isoformat(),
+         "start_timestamp": current_time,
          "working_directory": str(Path.cwd()),
-         "user": getpass.getuser()
+         "user": getpass.getuser(),
+         "heartbeat": current_time,
+         "stop_requested": False,
+         "exited": False
       }
       
       try:
@@ -1819,6 +1823,93 @@ class DaemonCommand(BaseCommand):
             json.dump(daemon_info, f, indent=2)
       except Exception as e:
          raise Exception(f"Failed to write daemon info to {pid_file}: {str(e)}")
+   
+   def _update_daemon_heartbeat(self, pid_file: Path) -> bool:
+      """Update daemon heartbeat and check for stop request
+      
+      Returns:
+         True if daemon should continue running, False if stop was requested
+      """
+      try:
+         # Read current daemon info
+         daemon_info = self._read_daemon_info(pid_file)
+         if not daemon_info:
+            self.logger.warning("PID file disappeared, daemon will exit")
+            return False
+         
+         # Check if stop was requested
+         if daemon_info.get('stop_requested', False):
+            self.logger.info("Stop request detected, daemon will exit")
+            return False
+         
+         # Update heartbeat
+         daemon_info['heartbeat'] = datetime.now().isoformat()
+         
+         # Write back to file
+         with open(pid_file, 'w') as f:
+            json.dump(daemon_info, f, indent=2)
+         
+         return True
+         
+      except Exception as e:
+         self.logger.error(f"Failed to update daemon heartbeat: {str(e)}")
+         # Continue running on heartbeat errors to avoid unnecessary shutdowns
+         return True
+   
+   def _mark_daemon_exited(self, pid_file: Path) -> None:
+      """Mark daemon as exited in PID file before terminating"""
+      try:
+         daemon_info = self._read_daemon_info(pid_file)
+         if daemon_info:
+            daemon_info['exited'] = True
+            daemon_info['heartbeat'] = datetime.now().isoformat()
+            
+            with open(pid_file, 'w') as f:
+               json.dump(daemon_info, f, indent=2)
+            
+            self.logger.info("Marked daemon as exited in PID file")
+         
+      except Exception as e:
+         self.logger.error(f"Failed to mark daemon as exited: {str(e)}")
+         # Don't raise exception here as we're shutting down anyway
+   
+   def _is_daemon_stale(self, daemon_info: Dict[str, Any], heartbeat_timeout_minutes: int = 30) -> bool:
+      """Check if daemon is stale based on heartbeat timestamp
+      
+      Args:
+         daemon_info: Daemon information dictionary
+         heartbeat_timeout_minutes: Minutes after which daemon is considered stale
+         
+      Returns:
+         True if daemon appears stale, False otherwise
+      """
+      if not daemon_info:
+         return True
+      
+      # Check if daemon marked itself as exited
+      if daemon_info.get('exited', False):
+         return True
+      
+      # Check heartbeat timestamp
+      heartbeat_str = daemon_info.get('heartbeat')
+      if not heartbeat_str:
+         # No heartbeat info, assume stale if it's a legacy format
+         return daemon_info.get('legacy', False)
+      
+      try:
+         # Parse heartbeat timestamp
+         heartbeat_time = datetime.strptime(heartbeat_str[:19], '%Y-%m-%dT%H:%M:%S')
+         current_time = datetime.now()
+         
+         # Check if heartbeat is too old
+         time_diff = current_time - heartbeat_time
+         timeout_seconds = heartbeat_timeout_minutes * 60
+         
+         return time_diff.total_seconds() > timeout_seconds
+         
+      except (ValueError, TypeError):
+         # Invalid heartbeat timestamp, consider stale
+         return True
    
    def _read_daemon_info(self, pid_file: Path) -> Dict[str, Any]:
       """Read daemon information from PID file (JSON or legacy format)"""
@@ -1904,20 +1995,40 @@ class DaemonCommand(BaseCommand):
             if daemon_info:
                pid = daemon_info['pid']
                
-               # Check if process is still running
-               try:
-                  os.kill(pid, 0)  # Signal 0 just checks if process exists
-                  
-                  # Check if it's running on this host
-                  if self._check_hostname_match(daemon_info):
-                     print(f"Daemon already running with PID {pid}")
-                  else:
-                     print(self._format_daemon_location_message(daemon_info))
-                  return 1
-               except OSError:
-                  # Process doesn't exist, remove stale PID file
+               # Check if daemon marked itself as exited
+               if daemon_info.get('exited', False):
+                  print("Previous daemon has exited, cleaning up PID file...")
+                  pid_file.unlink()
+               # Check if daemon is stale
+               elif self._is_daemon_stale(daemon_info):
+                  print("Found stale daemon PID file, cleaning up...")
+                  if daemon_info.get('heartbeat'):
+                     try:
+                        last_heartbeat = datetime.strptime(daemon_info['heartbeat'][:19], '%Y-%m-%dT%H:%M:%S')
+                        print(f"Last heartbeat was: {format_timestamp(last_heartbeat)}")
+                     except (ValueError, TypeError):
+                        pass
                   pid_file.unlink()
                   print("Removed stale PID file")
+               else:
+                  # Check if process is still running
+                  try:
+                     os.kill(pid, 0)  # Signal 0 just checks if process exists
+                     
+                     # Check if it's running on this host
+                     if self._check_hostname_match(daemon_info):
+                        if daemon_info.get('stop_requested', False):
+                           print(f"Daemon with PID {pid} is shutting down (stop requested)")
+                           print("Wait for it to exit or use 'pbs-monitor daemon status' to check progress")
+                        else:
+                           print(f"Daemon already running with PID {pid}")
+                     else:
+                        print(self._format_daemon_location_message(daemon_info))
+                     return 1
+                  except OSError:
+                     # Process doesn't exist, remove stale PID file
+                     pid_file.unlink()
+                     print("Removed stale PID file (process not found)")
          except Exception as e:
             # Invalid PID file, remove it
             self.logger.warning(f"Invalid PID file: {str(e)}")
@@ -1938,7 +2049,17 @@ class DaemonCommand(BaseCommand):
          print(f"Error: Failed to initialize data collector: {str(e)}")
          return 1
       
-      if hasattr(args, 'detach') and args.detach:
+      # Write initial daemon info file before detaching
+      try:
+         self._write_daemon_info(pid_file, os.getpid())
+      except Exception as e:
+         print(f"Error: Failed to write daemon info: {str(e)}")
+         return 1
+      
+      # Detach by default unless explicitly disabled
+      should_detach = not (hasattr(args, 'foreground') and args.foreground)
+      
+      if should_detach:
          # Fork to background
          if os.fork() > 0:
             # Parent process exits
@@ -1948,6 +2069,13 @@ class DaemonCommand(BaseCommand):
          # Child process continues
          os.setsid()  # Create new session
          os.chdir('/')  # Change to root directory
+         
+         # Update PID file with correct working directory after detachment
+         try:
+            self._write_daemon_info(pid_file, os.getpid())
+         except Exception as e:
+            # Log error but don't exit - daemon can still function
+            self.logger.error(f"Failed to update daemon info after detachment: {str(e)}")
          
          # Redirect stdout/stderr to prevent issues
          sys.stdout.flush()
@@ -1960,18 +2088,10 @@ class DaemonCommand(BaseCommand):
             os.dup2(devnull.fileno(), sys.stdout.fileno())
             os.dup2(devnull.fileno(), sys.stderr.fileno())
       
-      # Write daemon info file
-      try:
-         self._write_daemon_info(pid_file, os.getpid())
-      except Exception as e:
-         print(f"Error: Failed to write daemon info: {str(e)}")
-         return 1
-      
       # Set up signal handlers for graceful shutdown
       def signal_handler(signum, frame):
          print(f"Received signal {signum}, shutting down...")
-         if pid_file.exists():
-            pid_file.unlink()
+         self._mark_daemon_exited(pid_file)
          collector.stop_background_updates()
          sys.exit(0)
       
@@ -1985,27 +2105,43 @@ class DaemonCommand(BaseCommand):
          # Start background updates
          collector.start_background_updates()
          
-         if not (hasattr(args, 'detach') and args.detach):
+         if not should_detach:
             print("Daemon running in foreground. Press Ctrl+C to stop.")
             print(f"PID file: {pid_file}")
          
-         # Keep the main thread alive
+         # Main daemon loop with heartbeat and stop checking
+         heartbeat_interval = 600  # 10 minutes in seconds
+         last_heartbeat = time.time()
+         
          try:
             while True:
-               time.sleep(1)
+               current_time = time.time()
+               
+               # Check if it's time for heartbeat update
+               if current_time - last_heartbeat >= heartbeat_interval:
+                  if not self._update_daemon_heartbeat(pid_file):
+                     # Stop was requested
+                     print("Stop request detected, shutting down...")
+                     break
+                  last_heartbeat = current_time
+               
+               # Sleep for a short interval before checking again
+               time.sleep(30)  # Check every 30 seconds
+               
          except KeyboardInterrupt:
             print("\nStopping daemon...")
-            collector.stop_background_updates()
+            
+         # Stop background updates
+         collector.stop_background_updates()
             
       finally:
-         # Clean up PID file
-         if pid_file.exists():
-            pid_file.unlink()
+         # Mark daemon as exited and clean up PID file
+         self._mark_daemon_exited(pid_file)
       
       return 0
    
    def _stop_daemon(self, args: argparse.Namespace) -> int:
-      """Stop the daemon"""
+      """Stop the daemon by setting stop flag"""
       pid_file = self._get_pid_file_path(args)
       
       if not pid_file.exists():
@@ -2018,48 +2154,43 @@ class DaemonCommand(BaseCommand):
             print("Daemon is not running (no PID file found)")
             return 1
          
+         # Check if daemon is already marked as exited
+         if daemon_info.get('exited', False):
+            print("Daemon has already exited")
+            return 0
+         
+         # Check if daemon is stale
+         if self._is_daemon_stale(daemon_info):
+            print("Daemon appears to be stale (old heartbeat or marked as exited)")
+            print("Cleaning up stale PID file...")
+            pid_file.unlink()
+            return 0
+         
+         # Check if stop was already requested
+         if daemon_info.get('stop_requested', False):
+            print("Stop request already pending. Check 'pbs-monitor daemon status' to see when daemon exits.")
+            return 0
+         
          pid = daemon_info['pid']
+         print(f"Requesting daemon shutdown (PID {pid})...")
          
-         # Check if daemon is running on this host
-         if not self._check_hostname_match(daemon_info):
-            print(self._format_daemon_location_message(daemon_info))
-            return 1
+         # Set stop_requested flag
+         daemon_info['stop_requested'] = True
+         daemon_info['heartbeat'] = datetime.now().isoformat()
          
-         print(f"Stopping daemon with PID {pid}...")
-         
-         # Send SIGTERM for graceful shutdown
          try:
-            os.kill(pid, signal.SIGTERM)
+            with open(pid_file, 'w') as f:
+               json.dump(daemon_info, f, indent=2)
             
-            # Wait for process to exit
-            for i in range(30):  # Wait up to 30 seconds
-               try:
-                  os.kill(pid, 0)  # Check if process still exists
-                  time.sleep(1)
-               except OSError:
-                  # Process has exited
-                  break
-            else:
-               # Process still running, force kill
-               print("Process didn't exit gracefully, forcing shutdown...")
-               os.kill(pid, signal.SIGKILL)
-            
-            print("Daemon stopped successfully")
-            
-            # Remove PID file
-            if pid_file.exists():
-               pid_file.unlink()
+            print("Stop request sent successfully.")
+            print("The daemon will shutdown within the next 10 minutes (at next heartbeat check).")
+            print("Use 'pbs-monitor daemon status' to monitor shutdown progress.")
             
             return 0
             
-         except OSError as e:
-            if e.errno == 3:  # No such process
-               print("Daemon was not running (stale PID file)")
-               pid_file.unlink()
-               return 0
-            else:
-               print(f"Error stopping daemon: {str(e)}")
-               return 1
+         except Exception as e:
+            print(f"Error setting stop flag: {str(e)}")
+            return 1
          
       except Exception as e:
          print(f"Error reading daemon info: {str(e)}")
@@ -2079,32 +2210,83 @@ class DaemonCommand(BaseCommand):
             if daemon_info:
                pid = daemon_info['pid']
                
-               try:
-                  os.kill(pid, 0)  # Check if process exists
-                  
-                  # Check if daemon is running on this host
-                  if self._check_hostname_match(daemon_info):
-                     print(f"Status: Running (PID {pid})")
-                     print(f"Hostname: {daemon_info.get('hostname', 'unknown')}")
-                     if daemon_info.get('user'):
-                        print(f"Started by: {daemon_info['user']}")
-                     if daemon_info.get('start_timestamp'):
-                        try:
-                           # Use strptime for better compatibility with older Python versions
-                           start_time = datetime.strptime(daemon_info['start_timestamp'][:19], '%Y-%m-%dT%H:%M:%S')
-                           print(f"Started at: {format_timestamp(start_time)}")
-                        except (ValueError, TypeError):
-                           pass
-                     if daemon_info.get('working_directory'):
-                        print(f"Working directory: {daemon_info['working_directory']}")
-                  else:
-                     print("Status: Running on different host")
-                     print(self._format_daemon_location_message(daemon_info))
+               # Check if daemon marked itself as exited
+               if daemon_info.get('exited', False):
+                  print(f"Status: Exited (PID {pid})")
+                  print(f"Hostname: {daemon_info.get('hostname', 'unknown')}")
+                  if daemon_info.get('heartbeat'):
+                     try:
+                        exit_time = datetime.strptime(daemon_info['heartbeat'][:19], '%Y-%m-%dT%H:%M:%S')
+                        print(f"Exited at: {format_timestamp(exit_time)}")
+                     except (ValueError, TypeError):
+                        pass
+               # Check if daemon is stale
+               elif self._is_daemon_stale(daemon_info):
+                  print(f"Status: Stale (PID {pid})")
+                  print(f"Hostname: {daemon_info.get('hostname', 'unknown')}")
+                  if daemon_info.get('heartbeat'):
+                     try:
+                        last_heartbeat = datetime.strptime(daemon_info['heartbeat'][:19], '%Y-%m-%dT%H:%M:%S')
+                        print(f"Last heartbeat: {format_timestamp(last_heartbeat)}")
+                        
+                        # Calculate how long since last heartbeat
+                        time_since = datetime.now() - last_heartbeat
+                        hours = int(time_since.total_seconds() // 3600)
+                        minutes = int((time_since.total_seconds() % 3600) // 60)
+                        print(f"Time since heartbeat: {hours}h {minutes}m")
+                     except (ValueError, TypeError):
+                        pass
+                  print("Daemon appears to have crashed or been killed")
+               else:
+                  # Check if process is actually running
+                  try:
+                     os.kill(pid, 0)  # Check if process exists
                      
-               except OSError:
-                  print("Status: Not running (stale PID file)")
-                  if not daemon_info.get('legacy', False):
-                     print(f"Last known host: {daemon_info.get('hostname', 'unknown')}")
+                     # Check if daemon is running on this host
+                     if self._check_hostname_match(daemon_info):
+                        # Check if stop was requested
+                        if daemon_info.get('stop_requested', False):
+                           print(f"Status: Stopping (PID {pid})")
+                           print("Stop request pending - daemon will exit at next heartbeat")
+                        else:
+                           print(f"Status: Running (PID {pid})")
+                        
+                        print(f"Hostname: {daemon_info.get('hostname', 'unknown')}")
+                        if daemon_info.get('user'):
+                           print(f"Started by: {daemon_info['user']}")
+                        if daemon_info.get('start_timestamp'):
+                           try:
+                              start_time = datetime.strptime(daemon_info['start_timestamp'][:19], '%Y-%m-%dT%H:%M:%S')
+                              print(f"Started at: {format_timestamp(start_time)}")
+                           except (ValueError, TypeError):
+                              pass
+                        if daemon_info.get('heartbeat'):
+                           try:
+                              last_heartbeat = datetime.strptime(daemon_info['heartbeat'][:19], '%Y-%m-%dT%H:%M:%S')
+                              print(f"Last heartbeat: {format_timestamp(last_heartbeat)}")
+                              
+                              # Calculate time since last heartbeat
+                              time_since = datetime.now() - last_heartbeat
+                              minutes = int(time_since.total_seconds() // 60)
+                              print(f"Minutes since heartbeat: {minutes}")
+                           except (ValueError, TypeError):
+                              pass
+                        if daemon_info.get('working_directory'):
+                           print(f"Working directory: {daemon_info['working_directory']}")
+                     else:
+                        print("Status: Running on different host")
+                        print(self._format_daemon_location_message(daemon_info))
+                        
+                  except OSError:
+                     print(f"Status: Not running (process {pid} not found)")
+                     if not daemon_info.get('legacy', False):
+                        print(f"Last known host: {daemon_info.get('hostname', 'unknown')}")
+                        if daemon_info.get('heartbeat'):
+                           try:
+                              last_heartbeat = datetime.strptime(daemon_info['heartbeat'][:19], '%Y-%m-%dT%H:%M:%S')
+                              print(f"Last heartbeat: {format_timestamp(last_heartbeat)}")
+                           except (ValueError, TypeError):
+                              pass
             else:
                print("Status: Not running (invalid PID file)")
          except Exception as e:
