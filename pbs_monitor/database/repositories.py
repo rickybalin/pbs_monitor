@@ -66,10 +66,11 @@ class JobRepository(BaseRepository):
             return job
     
     def get_active_jobs(self) -> List[Job]:
-        """Get all active jobs (running or queued)"""
+        """Get all active jobs (running, queued, held, etc. - excluding completed states)"""
         with self.get_session() as session:
             jobs = session.query(Job).filter(
-                Job.state.in_([JobState.RUNNING, JobState.QUEUED, JobState.HELD])
+                Job.state.in_([JobState.RUNNING, JobState.QUEUED, JobState.HELD, 
+                              JobState.WAITING, JobState.TRANSITIONING, JobState.EXITING, JobState.SUSPENDED])
             ).all()
             # Force loading of all attributes to avoid detached instance issues
             session.expunge_all()
@@ -82,6 +83,18 @@ class JobRepository(BaseRepository):
             # Force loading of all attributes to avoid detached instance issues
             session.expunge_all()
             return jobs
+    
+    def mark_job_as_unknown_end(self, job_id: str) -> bool:
+        """Mark a job as UNKNOWN_END state with final_state_recorded=True"""
+        with self.get_session() as session:
+            job = session.query(Job).filter(Job.job_id == job_id).first()
+            if job:
+                job.state = JobState.UNKNOWN_END
+                job.final_state_recorded = True
+                job.last_updated = func.now()
+                session.commit()
+                return True
+            return False
     
     def get_jobs_by_queue(self, queue: str) -> List[Job]:
         """Get jobs in specific queue"""

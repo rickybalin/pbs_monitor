@@ -98,6 +98,10 @@ class DatabaseConfig:
    auto_persist: bool = False
    auto_persist_interval: int = 300        # 5 minutes (300 seconds)
    batch_size: int = 1000
+   
+   # Orphaned job detection settings
+   orphaned_job_detection: bool = True     # Enable detection of orphaned jobs
+   orphaned_job_threshold_minutes: int = 60  # Minutes before marking job as orphaned
 
 
 @dataclass
@@ -277,7 +281,9 @@ class Config:
             'daemon_enabled': True,
             'auto_persist': False,
             'auto_persist_interval': 300,
-            'batch_size': 1000
+            'batch_size': 1000,
+            'orphaned_job_detection': True,
+            'orphaned_job_threshold_minutes': 60
          }
       }
       

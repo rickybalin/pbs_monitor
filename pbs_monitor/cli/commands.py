@@ -1550,7 +1550,7 @@ class HistoryCommand(BaseCommand):
          db_jobs = [job for job in db_jobs if job.is_completed()]
       else:
          # Get jobs by specific state
-         state_map = {"C": DBJobState.COMPLETED, "F": DBJobState.FINISHED, "E": DBJobState.EXITING}
+         state_map = {"C": DBJobState.COMPLETED, "F": DBJobState.FINISHED, "E": DBJobState.EXITING, "UNKNOWN_END": DBJobState.UNKNOWN_END}
          db_state = state_map[args.state]
          db_jobs = job_repo.get_jobs_by_state(db_state)
          # Apply user filter if specified

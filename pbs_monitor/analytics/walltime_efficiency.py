@@ -158,7 +158,7 @@ class WalltimeEfficiencyAnalyzer:
       # Query for completed jobs with required data
       query = session.query(Job).filter(
          and_(
-            Job.state.in_([JobState.COMPLETED, JobState.FINISHED]),
+            Job.state.in_([JobState.COMPLETED, JobState.FINISHED, JobState.UNKNOWN_END]),
             Job.last_updated >= cutoff_date,
             Job.walltime.isnot(None),
             or_(
@@ -234,7 +234,7 @@ class WalltimeEfficiencyAnalyzer:
       # Note: If Job model doesn't have project field, this will filter out all jobs
       query = session.query(Job).filter(
          and_(
-            Job.state.in_([JobState.COMPLETED, JobState.FINISHED]),
+            Job.state.in_([JobState.COMPLETED, JobState.FINISHED, JobState.UNKNOWN_END]),
             Job.last_updated >= cutoff_date,
             Job.walltime.isnot(None),
             or_(
@@ -387,7 +387,7 @@ class WalltimeEfficiencyAnalyzer:
          # Count total completed jobs in period
          total_jobs = session.query(Job).filter(
             and_(
-               Job.state.in_([JobState.COMPLETED, JobState.FINISHED]),
+               Job.state.in_([JobState.COMPLETED, JobState.FINISHED, JobState.UNKNOWN_END]),
                Job.last_updated >= cutoff_date
             )
          ).count()
@@ -397,7 +397,7 @@ class WalltimeEfficiencyAnalyzer:
             # For project analysis, exclude NULL projects (if project field exists)
             project_query = session.query(Job).filter(
                and_(
-                  Job.state.in_([JobState.COMPLETED, JobState.FINISHED]),
+                  Job.state.in_([JobState.COMPLETED, JobState.FINISHED, JobState.UNKNOWN_END]),
                   Job.last_updated >= cutoff_date,
                   Job.walltime.isnot(None),
                   or_(
@@ -413,7 +413,7 @@ class WalltimeEfficiencyAnalyzer:
             # For user analysis, include all jobs (including NULL projects)
             jobs_with_data = session.query(Job).filter(
                and_(
-                  Job.state.in_([JobState.COMPLETED, JobState.FINISHED]),
+                  Job.state.in_([JobState.COMPLETED, JobState.FINISHED, JobState.UNKNOWN_END]),
                   Job.last_updated >= cutoff_date,
                   Job.walltime.isnot(None),
                   or_(

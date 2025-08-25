@@ -38,6 +38,7 @@ class JobState(enum.Enum):
     SUSPENDED = "S"
     COMPLETED = "C"
     FINISHED = "F"
+    UNKNOWN_END = "UNKNOWN_END"  # Job disappeared from PBS without final state
     
     @classmethod
     def from_pbs_state(cls, pbs_state: PBSJobState) -> 'JobState':
@@ -155,11 +156,11 @@ class Job(Base):
     
     def is_active(self) -> bool:
         """Check if job is currently active"""
-        return self.state in [JobState.QUEUED, JobState.RUNNING, JobState.HELD]
+        return self.state in [JobState.QUEUED, JobState.RUNNING, JobState.HELD, JobState.WAITING, JobState.TRANSITIONING, JobState.EXITING, JobState.SUSPENDED]
     
     def is_completed(self) -> bool:
         """Check if job has completed"""
-        return self.state in [JobState.COMPLETED, JobState.FINISHED]
+        return self.state in [JobState.COMPLETED, JobState.FINISHED, JobState.UNKNOWN_END]
     
     def estimated_total_cores(self) -> int:
         """Calculate total cores requested"""

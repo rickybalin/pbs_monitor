@@ -245,7 +245,7 @@ class RunScoreAnalyzer:
             # Count finished jobs that can be analyzed
             finished_jobs_total = session.query(Job).filter(
                 and_(
-                    Job.state == JobState.FINISHED,
+                    Job.state.in_([JobState.FINISHED, JobState.COMPLETED, JobState.UNKNOWN_END]),
                     Job.end_time >= cutoff_date,
                     Job.raw_pbs_data.isnot(None),
                     Job.nodes.isnot(None),

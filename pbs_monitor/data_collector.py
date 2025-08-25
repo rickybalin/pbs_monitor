@@ -622,6 +622,102 @@ class DataCollector:
          if keys_to_remove:
             self.logger.debug(f"Cleaned up {len(keys_to_remove)} reservation state cache entries")
    
+   def _detect_and_handle_orphaned_jobs(self, current_pbs_job_ids: Set[str]) -> None:
+      """
+      Detect jobs that are active in database but missing from PBS and mark them as UNKNOWN_END
+      
+      Args:
+         current_pbs_job_ids: Set of job IDs currently visible in PBS (current + completed)
+      """
+      if not self._database_enabled:
+         return
+      
+      # Check if orphaned job detection is enabled (default: True)
+      orphaned_detection_enabled = getattr(self.config.database, 'orphaned_job_detection', True)
+      if not orphaned_detection_enabled:
+         self.logger.debug("Orphaned job detection is disabled")
+         return
+      
+      # Get orphaned job threshold (default: 60 minutes)
+      threshold_minutes = getattr(self.config.database, 'orphaned_job_threshold_minutes', 60)
+      threshold_delta = timedelta(minutes=threshold_minutes)
+      
+      try:
+         job_repo = self._repository_factory.get_job_repository()
+         
+         # Get all active jobs from database
+         active_db_jobs = job_repo.get_active_jobs()
+         
+         orphaned_job_ids = []
+         current_time = datetime.now()
+         
+         for db_job in active_db_jobs:
+            # Check if job is missing from PBS
+            if db_job.job_id not in current_pbs_job_ids:
+               # Check if enough time has passed since last update
+               time_since_update = current_time - db_job.last_updated
+               if time_since_update > threshold_delta:
+                  orphaned_job_ids.append(db_job.job_id)
+         
+         # Mark orphaned jobs as UNKNOWN_END
+         if orphaned_job_ids:
+            self.logger.warning(f"Found {len(orphaned_job_ids)} orphaned jobs, marking as UNKNOWN_END: {', '.join(orphaned_job_ids)}")
+            
+            for job_id in orphaned_job_ids:
+               success = job_repo.mark_job_as_unknown_end(job_id)
+               if not success:
+                  self.logger.error(f"Failed to mark job {job_id} as UNKNOWN_END")
+                  
+            self.logger.info(f"Successfully marked {len(orphaned_job_ids)} orphaned jobs as UNKNOWN_END")
+         else:
+            self.logger.debug("No orphaned jobs detected")
+            
+      except Exception as e:
+         self.logger.error(f"Failed to detect orphaned jobs: {str(e)}")
+   
+   def _check_for_orphaned_job_recovery(self, current_pbs_jobs: List[PBSJob]) -> None:
+      """
+      Check if any jobs previously marked as UNKNOWN_END now appear in PBS with final states
+      
+      Args:
+         current_pbs_jobs: List of current PBS jobs (includes completed jobs from qstat -x)
+      """
+      if not self._database_enabled:
+         return
+      
+      try:
+         job_repo = self._repository_factory.get_job_repository()
+         
+         # Get all jobs currently marked as UNKNOWN_END
+         with job_repo.get_session() as session:
+            from .database.models import JobState as DBJobState, Job
+            orphaned_jobs = session.query(Job).filter(Job.state == DBJobState.UNKNOWN_END).all()
+            
+            if not orphaned_jobs:
+               return
+            
+            orphaned_job_ids = {job.job_id for job in orphaned_jobs}
+            recovered_jobs = []
+            
+            # Check if any orphaned jobs now appear in PBS with final states
+            for pbs_job in current_pbs_jobs:
+               if (pbs_job.job_id in orphaned_job_ids and 
+                   pbs_job.state.value in ['C', 'F', 'E']):  # Completed, Finished, Exiting
+                  recovered_jobs.append(pbs_job)
+            
+            if recovered_jobs:
+               self.logger.info(f"Found {len(recovered_jobs)} previously orphaned jobs that completed: {[j.job_id for j in recovered_jobs]}")
+               
+               # Update these jobs with their actual final states
+               for pbs_job in recovered_jobs:
+                  # Convert PBS job to database format and update
+                  db_job_data = self._model_converters.job.to_database_dict(pbs_job)
+                  job_repo.create_or_update_job(db_job_data)
+                  self.logger.info(f"Updated orphaned job {pbs_job.job_id} to final state {pbs_job.state.value}")
+                  
+      except Exception as e:
+         self.logger.error(f"Failed to check for orphaned job recovery: {str(e)}")
+   
    def get_queue_utilization(self) -> Dict[str, float]:
       """
       Get utilization percentage for each queue
@@ -692,6 +788,12 @@ class DataCollector:
          current_reservation_ids = {reservation.reservation_id for reservation in self._reservations}
          self._cleanup_job_state_cache(current_job_ids)
          self._cleanup_reservation_state_cache(current_reservation_ids)
+         
+         # Detect and handle orphaned jobs (active in DB but missing from PBS)
+         self._detect_and_handle_orphaned_jobs(current_job_ids)
+         
+         # Check for recovery of previously orphaned jobs
+         self._check_for_orphaned_job_recovery(all_jobs_for_db)
          
          # Add collection log ID to remaining entries (job_history already has it)
          for entry in db_data['queue_snapshots']:

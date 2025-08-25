@@ -300,9 +300,9 @@ Examples:
    )
    history_parser.add_argument(
       "-s", "--state",
-      choices=["C", "F", "E", "all"],
+      choices=["C", "F", "E", "UNKNOWN_END", "all"],
       default="all",
-      help="Filter by completion state: C (completed), F (finished), E (exiting), all (default: all)"
+      help="Filter by completion state: C (completed), F (finished), E (exiting), UNKNOWN_END (orphaned), all (default: all)"
    )
    history_parser.add_argument(
       "--columns",

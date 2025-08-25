@@ -19,6 +19,7 @@ class JobState(Enum):
    SUSPENDED = "S"
    COMPLETED = "C"
    FINISHED = "F"
+   UNKNOWN_END = "UNKNOWN_END"  # Job disappeared from PBS without final state
 
 
 @dataclass
