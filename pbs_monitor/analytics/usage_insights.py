@@ -42,6 +42,8 @@ from sqlalchemy import and_, func, or_
 
 from ..database.repositories import RepositoryFactory
 from ..database.models import Job, JobHistory, JobState
+from ..data_collector import DataCollector
+from ..models.job import PBSJob, JobState as PBSJobState
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -61,8 +63,9 @@ class QueueFilter:
 class UsageInsights:
    """Compute usage insight metrics and generate plots."""
 
-   def __init__(self, repository_factory: Optional[RepositoryFactory] = None):
+   def __init__(self, repository_factory: Optional[RepositoryFactory] = None, data_collector: Optional[DataCollector] = None):
       self.repo_factory = repository_factory or RepositoryFactory()
+      self.data_collector = data_collector
       self.logger = logging.getLogger(__name__)
 
    # --------- Public API ---------
@@ -89,7 +92,7 @@ class UsageInsights:
 
          # Get both started and queued jobs
          started_jobs = self._query_started_jobs(session, cutoff_start)
-         queued_jobs = self._query_queued_jobs(session)
+         queued_jobs = self._get_live_queued_jobs()
          jobs = started_jobs + queued_jobs
 
          if not jobs:
@@ -536,20 +539,76 @@ class UsageInsights:
       ).all()
       return jobs
 
-   def _query_queued_jobs(self, session: Session) -> List[Job]:
-      """Get currently queued jobs (submitted but not started or in Q state)."""
-      now = datetime.now()
-      jobs = session.query(Job).filter(
-         and_(
-            Job.submit_time.isnot(None),
-            Job.nodes.isnot(None),
-            Job.walltime.isnot(None),
-            Job.start_time.is_(None),
-            Job.state == JobState.QUEUED
-         )
-      ).all()
-      self.logger.debug(f"Found {len(jobs)} queued jobs in database")
-      return jobs
+   def _get_live_queued_jobs(self) -> List[Job]:
+      """Get currently queued jobs from live PBS system."""
+      try:
+         # Get live PBS data
+         if self.data_collector is None:
+            self.data_collector = DataCollector()
+         
+         live_jobs = self.data_collector.get_jobs(force_refresh=True)
+         
+         # Filter for queued jobs and convert to database Job objects
+         queued_jobs = []
+         for pbs_job in live_jobs:
+            if pbs_job.state == PBSJobState.QUEUED:
+               db_job = self._convert_pbs_job_to_db_job(pbs_job)
+               if db_job:
+                  queued_jobs.append(db_job)
+         
+         self.logger.debug(f"Found {len(queued_jobs)} live queued jobs")
+         return queued_jobs
+         
+      except Exception as e:
+         self.logger.warning(f"Failed to get live queued jobs: {e}")
+         # Fallback to database queued jobs (will include stale data)
+         return self._query_queued_jobs_from_db()
+   
+   def _query_queued_jobs_from_db(self) -> List[Job]:
+      """Fallback: Get queued jobs from database (may include stale data)."""
+      with self.repo_factory.get_job_repository().get_session() as session:
+         jobs = session.query(Job).filter(
+            and_(
+               Job.submit_time.isnot(None),
+               Job.nodes.isnot(None),
+               Job.walltime.isnot(None),
+               Job.start_time.is_(None),
+               Job.state == JobState.QUEUED
+            )
+         ).all()
+         self.logger.debug(f"Found {len(jobs)} queued jobs in database (fallback)")
+         return jobs
+   
+   def _convert_pbs_job_to_db_job(self, pbs_job: PBSJob) -> Optional[Job]:
+      """Convert a PBSJob to a database Job object for analytics."""
+      try:
+         # Create a Job-like object that has the required attributes
+         # We don't actually save this to the database, just use it for analytics
+         class MockJob:
+            def __init__(self):
+               self.job_id = pbs_job.job_id
+               self.owner = pbs_job.owner
+               self.project = pbs_job.project
+               self.queue = pbs_job.queue
+               self.nodes = pbs_job.nodes
+               self.walltime = pbs_job.walltime
+               self.submit_time = pbs_job.submit_time
+               self.start_time = pbs_job.start_time
+               self.end_time = pbs_job.end_time
+               # Convert PBSJobState to JobState
+               if pbs_job.state == PBSJobState.QUEUED:
+                  self.state = JobState.QUEUED
+               elif pbs_job.state == PBSJobState.RUNNING:
+                  self.state = JobState.RUNNING
+               elif pbs_job.state == PBSJobState.HELD:
+                  self.state = JobState.HELD
+               else:
+                  self.state = JobState.QUEUED  # Default for unknown states
+         
+         return MockJob()
+      except Exception as e:
+         self.logger.debug(f"Failed to convert PBSJob {pbs_job.job_id}: {e}")
+         return None
 
    def _find_start_score(self, session: Session, job: Job) -> Optional[float]:
       """
