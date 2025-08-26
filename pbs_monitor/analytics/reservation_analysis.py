@@ -78,6 +78,10 @@ class ReservationUtilizationAnalyzer:
                     'owner': reservation.owner,
                     'queue': reservation.queue,
                     'state': reservation.state.value if reservation.state else 'unknown',
+                    'nodes': reservation.nodes,
+                    'walltime': reservation.walltime,
+                    'start_time': reservation.start_time,
+                    'end_time': reservation.end_time,
                     **metrics
                 }
                 

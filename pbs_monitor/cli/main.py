@@ -491,6 +491,12 @@ Examples:
       default="table",
       help="Output format (default: table)"
    )
+   reservation_util_parser.add_argument(
+      "--status",
+      choices=["running", "future", "all"],
+      default="all",
+      help="Filter reservations by status: running (currently active), future (not yet started), or all (default: all)"
+   )
    
    # Analyze reservation-trends
    reservation_trends_parser = analyze_subparsers.add_parser(

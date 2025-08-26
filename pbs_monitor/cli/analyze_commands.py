@@ -36,6 +36,7 @@ class AnalyzeCommand(BaseCommand):
          print("  pbs-monitor analyze run-score                    # Analyze job scores")
          print("  pbs-monitor analyze walltime-efficiency-by-user  # Analyze user efficiency")
          print("  pbs-monitor analyze reservation-utilization      # Analyze reservation usage")
+         print("  pbs-monitor analyze reservation-utilization --status running  # Show only running reservations")
          print("  pbs-monitor analyze usage-insights --format csv  # Metrics CSV for last 30 days")
          print("\nUse 'pbs-monitor analyze <action> --help' for more information about each action")
          return 1
@@ -803,6 +804,15 @@ class AnalyzeCommand(BaseCommand):
             self.console.print("[yellow]No reservation utilization data found.[/yellow]")
             return 0
          
+         # Apply status filter if specified
+         status_filter = getattr(args, 'status', 'all')
+         if status_filter != 'all':
+            filtered_utilizations = self._filter_utilizations_by_status(utilizations, status_filter)
+            if not filtered_utilizations:
+               self.console.print(f"[yellow]No {status_filter} reservations found.[/yellow]")
+               return 0
+            utilizations = filtered_utilizations
+         
          # Get summary statistics
          summary = analyzer.get_utilization_summary(start_date, end_date)
          
@@ -877,9 +887,17 @@ class AnalyzeCommand(BaseCommand):
    def _display_reservation_utilization_results(self, utilizations: List, summary: Dict[str, Any], args: argparse.Namespace) -> None:
       """Display reservation utilization analysis results"""
       
-      # Show summary
-      self.console.print(f"\n[bold green]Reservation Utilization Analysis Summary[/bold green]")
-      self.console.print(f"Total Reservations Analyzed: {summary['total_reservations']}")
+      # Sort by start time
+      sorted_utilizations = sorted(utilizations, key=lambda x: x.get('start_time') or datetime.min)
+      
+      # Show summary with filter information
+      status_filter = getattr(args, 'status', 'all')
+      filter_text = f" ({status_filter} reservations)" if status_filter != 'all' else ""
+      
+      self.console.print(f"\n[bold green]Reservation Utilization Analysis Summary{filter_text}[/bold green]")
+      self.console.print(f"Reservations Displayed: {len(sorted_utilizations)}")
+      if status_filter == 'all':
+         self.console.print(f"Total Reservations in Database: {summary['total_reservations']}")
       self.console.print(f"Average Utilization: {summary['avg_utilization']:.1f}%")
       self.console.print(f"Median Utilization: {summary['median_utilization']:.1f}%")
       self.console.print(f"Underutilized (<50%): {summary['underutilized_count']}")
@@ -889,9 +907,9 @@ class AnalyzeCommand(BaseCommand):
       output_format = getattr(args, 'format', 'table')
       
       if output_format == 'csv':
-         self._display_reservation_utilization_csv(utilizations)
+         self._display_reservation_utilization_csv(sorted_utilizations)
       else:
-         self._display_reservation_utilization_table(utilizations)
+         self._display_reservation_utilization_table(sorted_utilizations)
    
    def _display_reservation_utilization_table(self, utilizations: List) -> None:
       """Display reservation utilization results in table format"""
@@ -900,24 +918,37 @@ class AnalyzeCommand(BaseCommand):
          self.console.print("[yellow]No utilization data to display.[/yellow]")
          return
       
-      # Prepare table data
+      # Import formatters
+      from ..utils.formatters import format_timestamp, format_duration
+      
+      # Prepare table data with compact format
       headers = [
-         'Reservation ID', 'Reservation Name', 'Owner', 'Queue', 'Utilization %', 
-         'Node Hours Reserved', 'Node Hours Used', 'Jobs Submitted', 'Jobs Completed'
+         'Reservation ID', 'Reservation Name', 'Queue', 'Utilization %', 
+         'Nodes', 'Walltime', 'Start Time', 'Jobs'
       ]
       rows = []
       
       for util in utilizations:
+         # Format reservation ID with state indicator
+         res_id = self._format_reservation_id_with_state(
+            util['reservation_id'], 
+            util.get('state', 'unknown'), 
+            util.get('start_time'),
+            util.get('end_time')
+         )
+         
+         # Format jobs as "completed / submitted"
+         jobs_str = f"{util['jobs_completed']} / {util['jobs_submitted']}"
+         
          rows.append([
-            util['reservation_id'][:20] + '...' if len(util['reservation_id']) > 20 else util['reservation_id'],
+            res_id,
             util.get('reservation_name', '') or '',
-            util['owner'],
             util['queue'],
             f"{util['utilization_percentage']:.1f}%",
-            f"{util['total_node_hours_reserved']:.1f}",
-            f"{util['total_node_hours_used']:.1f}",
-            str(util['jobs_submitted']),
-            str(util['jobs_completed'])
+            str(util.get('nodes', '') or ''),
+            util.get('walltime', '') or '',
+            format_timestamp(util.get('start_time')),
+            jobs_str
          ])
       
       # Create and display table
@@ -929,13 +960,56 @@ class AnalyzeCommand(BaseCommand):
       
       self.console.print(table)
    
+   def _format_reservation_id_with_state(self, reservation_id: str, state: str, start_time, end_time) -> str:
+      """Format reservation ID with state indicator"""
+      # Remove hostname part if present (everything after the first dot)
+      if '.' in reservation_id:
+         short_id = reservation_id.split('.')[0]
+      else:
+         short_id = reservation_id
+      
+      # Determine state indicator
+      now = datetime.now()
+      
+      # Check if currently running (start_time <= now < end_time)
+      if start_time and end_time and start_time <= now < end_time:
+         return f"{short_id} [R]"
+      # Check if future (start_time > now)
+      elif start_time and start_time > now:
+         return f"{short_id} [F]"
+      # Otherwise it's completed (no indicator needed)
+      else:
+         return short_id
+   
+   def _filter_utilizations_by_status(self, utilizations: List, status_filter: str) -> List:
+      """Filter utilizations by reservation status"""
+      filtered = []
+      now = datetime.now()
+      
+      for util in utilizations:
+         start_time = util.get('start_time')
+         end_time = util.get('end_time')
+         
+         # Determine reservation status
+         if start_time and end_time and start_time <= now < end_time:
+            # Currently running
+            if status_filter == 'running':
+               filtered.append(util)
+         elif start_time and start_time > now:
+            # Future reservation
+            if status_filter == 'future':
+               filtered.append(util)
+         # Completed reservations are not included in running or future filters
+      
+      return filtered
+   
    def _display_reservation_utilization_csv(self, utilizations: List) -> None:
       """Display reservation utilization results in CSV format"""
       
       if not utilizations:
          return
       
-      # Convert to DataFrame for CSV output
+      # Convert to DataFrame for CSV output - include all fields for CSV
       data = []
       for util in utilizations:
          data.append({
@@ -943,6 +1017,11 @@ class AnalyzeCommand(BaseCommand):
             'reservation_name': util.get('reservation_name', '') or '',
             'owner': util['owner'],
             'queue': util['queue'],
+            'state': util.get('state', 'unknown'),
+            'nodes': util.get('nodes', ''),
+            'walltime': util.get('walltime', ''),
+            'start_time': util.get('start_time').isoformat() if util.get('start_time') else '',
+            'end_time': util.get('end_time').isoformat() if util.get('end_time') else '',
             'utilization_percentage': util['utilization_percentage'],
             'node_hours_reserved': util['total_node_hours_reserved'],
             'node_hours_used': util['total_node_hours_used'],
