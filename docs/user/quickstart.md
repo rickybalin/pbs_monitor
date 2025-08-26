@@ -38,7 +38,8 @@ pbs-monitor jobs
 pbs-monitor jobs -u myuser
 
 # Nodes / Queues
-pbs-monitor nodes
+pbs-monitor nodes                 # Show all nodes
+pbs-monitor nodes node1 node2     # Show specific nodes only
 pbs-monitor queues
 ```
 

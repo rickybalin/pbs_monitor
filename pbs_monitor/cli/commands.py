@@ -742,15 +742,21 @@ class NodesCommand(BaseCommand):
       """Execute nodes command"""
       
       try:
-         # Get nodes
-         nodes = self.collector.get_nodes(force_refresh=args.refresh)
+         # Get node names from arguments if provided
+         node_names = args.node_ids if args.node_ids else None
+         
+         # Get nodes (optionally filtered by node names)
+         nodes = self.collector.get_nodes(force_refresh=args.refresh, node_names=node_names)
          
          # Filter by state if specified
          if args.state:
             nodes = [node for node in nodes if node.state.value == args.state]
          
          if not nodes:
-            print("No nodes found")
+            if node_names:
+               print(f"No nodes found matching: {', '.join(node_names)}")
+            else:
+               print("No nodes found")
             # Handle database collection if requested
             self._handle_collection_if_requested(args)
             return 0
@@ -832,7 +838,7 @@ class NodesCommand(BaseCommand):
       print(f"  └─ Available CPUs: {format_number(resources['available_cpus'])}")
       print(f"  └─ CPU Utilization: {format_percentage(resources['cpu_utilization'])}")
       
-      if resources['total_memory_gb']:
+      if resources['total_memory_gb'] > 0:
          print(f"  └─ Total Memory: {resources['total_memory_gb']:.1f} TB")
          print(f"  └─ Used Memory: {resources['used_memory_gb']:.1f} TB")
          print(f"  └─ Available Memory: {resources['available_memory_gb']:.1f} TB")
@@ -918,9 +924,9 @@ class NodesCommand(BaseCommand):
             'used_cpus': used_cpus,
             'available_cpus': total_cpus - used_cpus,
             'cpu_utilization': cpu_utilization,
-            'total_memory_gb': total_memory_gb / 1024 if total_memory_gb > 0 else None,  # Convert to TB
-            'used_memory_gb': used_memory_gb / 1024 if used_memory_gb > 0 else None,    # Convert to TB
-            'available_memory_gb': (total_memory_gb - used_memory_gb) / 1024 if total_memory_gb > 0 else None,
+            'total_memory_gb': total_memory_gb / 1024 if total_memory_gb > 0 else 0.0,  # Convert to TB
+            'used_memory_gb': used_memory_gb / 1024 if total_memory_gb > 0 else 0.0,    # Convert to TB
+            'available_memory_gb': (total_memory_gb - used_memory_gb) / 1024 if total_memory_gb > 0 else 0.0,
             'memory_utilization': memory_utilization
          },
          'hardware_types': hardware_types
@@ -943,7 +949,7 @@ class NodesCommand(BaseCommand):
          cpu_ratio = count / total_nodes
          state_cpus = int(summary_stats['resources']['total_cpus'] * cpu_ratio)
          
-         if summary_stats['resources']['total_memory_gb']:
+         if summary_stats['resources']['total_memory_gb'] > 0:
             state_memory = summary_stats['resources']['total_memory_gb'] * cpu_ratio
          
          state_data.append([

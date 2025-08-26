@@ -250,25 +250,32 @@ class DataCollector:
       
       return self._queues.copy()
    
-   def get_nodes(self, force_refresh: bool = False) -> List[PBSNode]:
+   def get_nodes(self, force_refresh: bool = False, node_names: Optional[List[str]] = None) -> List[PBSNode]:
       """
       Get node information
       
       Args:
          force_refresh: Force refresh from PBS system
+         node_names: Optional list of specific node names to retrieve
          
       Returns:
          List of PBSNode objects
       """
+      # If specific nodes are requested, always refresh to get latest data
       should_refresh = (
          force_refresh or 
+         node_names is not None or
          self._last_node_update is None or
          (datetime.now() - self._last_node_update).total_seconds() > 
          self.config.pbs.node_refresh_interval
       )
       
       if should_refresh:
-         self._refresh_nodes()
+         self._refresh_nodes(node_names)
+      
+      # If specific nodes were requested, filter cached results
+      if node_names is not None:
+         return [node for node in self._nodes if node.name in node_names]
       
       return self._nodes.copy()
    
@@ -959,12 +966,23 @@ class DataCollector:
       except PBSCommandError as e:
          self.logger.error(f"Failed to refresh queues: {str(e)}")
    
-   def _refresh_nodes(self) -> None:
+   def _refresh_nodes(self, node_names: Optional[List[str]] = None) -> None:
       """Refresh node data from PBS system"""
       try:
          with self._update_lock:
-            self.logger.debug("Refreshing node data")
-            self._nodes = self.pbs_commands.pbsnodes()
+            if node_names:
+               self.logger.debug(f"Refreshing specific node data: {node_names}")
+               # For specific nodes, get fresh data and merge with existing cache
+               specific_nodes = self.pbs_commands.pbsnodes(node_names)
+               specific_node_names = {node.name for node in specific_nodes}
+               
+               # Keep existing nodes that weren't requested, replace requested ones
+               existing_nodes = [node for node in self._nodes if node.name not in specific_node_names]
+               self._nodes = existing_nodes + specific_nodes
+            else:
+               self.logger.debug("Refreshing all node data")
+               self._nodes = self.pbs_commands.pbsnodes()
+            
             self._last_node_update = datetime.now()
             self.logger.debug(f"Updated {len(self._nodes)} nodes")
       except PBSCommandError as e:

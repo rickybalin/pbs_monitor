@@ -54,7 +54,8 @@ Examples:
   pbs-monitor jobs -u myuser      # Show jobs for specific user
   pbs-monitor history             # Show completed jobs from database
   pbs-monitor history -u myuser   # Show user's completed jobs
-  pbs-monitor nodes               # Show node information
+  pbs-monitor nodes               # Show all node information
+  pbs-monitor nodes node1 node2   # Show specific nodes only
   pbs-monitor queues              # Show queue information
   pbs-monitor config --create     # Create sample configuration
       
@@ -112,9 +113,12 @@ options:
 ## nodes
 
 ```
-usage: pbs-monitor nodes [-h]
+usage: pbs-monitor nodes [-h] [node_ids ...]
                          [-s {free,offline,down,busy,job-exclusive,job-sharing}]
                          [-r] [--columns COLUMNS] [-d] [--collect]
+
+positional arguments:
+  node_ids              Optional node IDs to filter by (space separated)
 
 options:
   -h, --help            show this help message and exit

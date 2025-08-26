@@ -16,6 +16,10 @@ class NodeState(Enum):
    JOB_EXCLUSIVE = "job-exclusive"
    JOB_SHARING = "job-sharing"
    RESERVE = "reserve"
+   RESV_EXCLUSIVE = "resv-exclusive"
+   DOWN_OFFLINE = "down,offline"
+   STATE_UNKNOWN_DOWN = "state-unknown,down"
+   STATE_UNKNOWN_DOWN_OFFLINE = "state-unknown,down,offline"
    UNKNOWN = "unknown"
 
 

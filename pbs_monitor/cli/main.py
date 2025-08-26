@@ -201,8 +201,13 @@ Examples:
       help="Show node information"
    )
    nodes_parser.add_argument(
+      "node_ids",
+      nargs="*",
+      help="Optional node IDs to filter by (space separated)"
+   )
+   nodes_parser.add_argument(
       "-s", "--state",
-      choices=["free", "offline", "down", "busy", "job-exclusive", "job-sharing"],
+      choices=["free", "offline", "down", "busy", "job-exclusive", "job-sharing", "resv-exclusive", "down,offline", "state-unknown,down", "state-unknown,down,offline"],
       help="Filter by node state"
    )
    nodes_parser.add_argument(

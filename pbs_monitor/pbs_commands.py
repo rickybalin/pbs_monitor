@@ -389,16 +389,24 @@ class PBSCommands:
       
       return queues
    
-   def pbsnodes(self, node_name: Optional[str] = None) -> List[PBSNode]:
+   def pbsnodes(self, node_names: Optional[Union[str, List[str]]] = None) -> List[PBSNode]:
       """
       Get node information using pbsnodes
       
       Args:
-         node_name: Get specific node information
+         node_names: Get specific node information (single name or list of names)
          
       Returns:
          List of PBSNode objects
       """
+      # Normalize node_names to list
+      target_nodes = None
+      if node_names:
+         if isinstance(node_names, str):
+            target_nodes = [node_names]
+         else:
+            target_nodes = list(node_names)
+      
       if self.use_sample_data:
          try:
             data = self._load_sample_data("pbsnodes_a_f_json-output.json")
@@ -408,8 +416,9 @@ class PBSCommands:
       else:
          command = ["pbsnodes", "-a", "-F", "json"]
          
-         if node_name:
-            command.append(node_name)
+         # Add specific node names if provided
+         if target_nodes:
+            command.extend(target_nodes)
          
          try:
             output = self._run_command(command)
@@ -424,6 +433,10 @@ class PBSCommands:
       nodes_data = data.get("nodes", {})
       
       for node_name, node_info in nodes_data.items():
+         # Filter by target nodes if specified (for sample data)
+         if target_nodes and node_name not in target_nodes:
+            continue
+            
          node_info["name"] = node_name  # Ensure node name is in the data
          try:
             node = PBSNode.from_pbsnodes_json(node_info)
