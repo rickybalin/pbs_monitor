@@ -356,6 +356,7 @@ class UsageInsights:
       # ---- Queue depth over time (machine-hours queued) by queue ----
       try:
          bl_df = self._compute_backlog_timeseries(df, window_start, freq=ts_freq)
+         self.logger.debug(f"Backlog timeseries: {bl_df}")
          if not bl_df.empty:
             pivot = bl_df.pivot_table(index='timestamp', columns='queue', values='machine_hours', aggfunc='sum').fillna(0.0)
             fig, ax = plt.subplots(figsize=(14, 6))
@@ -366,7 +367,7 @@ class UsageInsights:
             ax.set_ylabel('Machine-hours queued')
             ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Queue', frameon=False)
             if save_dir:
-               pth = os.path.join(save_dir, f'backlog_node_hours_per_{ts_freq}.png')
+               pth = os.path.join(save_dir, f'queue_depth_node_hours_per_{ts_freq}.png')
                fig.savefig(pth, bbox_inches='tight', dpi=dpi)
                outputs['backlog_node_hours'] = pth
             plt.close(fig)
@@ -778,43 +779,84 @@ class UsageInsights:
 
    def _compute_backlog_timeseries(self, df: pd.DataFrame, window_start: pd.Timestamp, freq: str = 'D') -> pd.DataFrame:
       """
-      Estimate queue depth as sum of machine-hours for jobs queued at each timestamp.
-      Machine-hours are computed as (nodes × hours in the period defined by `freq`).
-      Each job contributes its nodes × period-hours from submit_time until start_time (exclusive).
+      Calculate machine-hours queued over time by queue.
+      
+      Machine-hours = (sum of queued node-hours in bin) / (total system nodes * hours in bin)
+      
+      For each time bin:
+      1. Find all jobs in QUEUED state during that time period
+      2. Sum their requested_node_hours (nodes × walltime_hours) 
+      3. Normalize by total system capacity (total_nodes × hours_in_bin)
+      
       Returns columns: ['timestamp', 'queue', 'machine_hours']
       """
       if df.empty:
          return pd.DataFrame(columns=['timestamp', 'queue', 'machine_hours'])
 
+      # Get total number of nodes in the system
+      total_nodes = self._detect_total_cluster_nodes()
+      if not total_nodes or total_nodes <= 0:
+         self.logger.warning("Could not determine total cluster nodes, using fallback of 1000")
+         total_nodes = 1000  # Fallback value
+      
+      # Generate timeline bins for the analysis window
+      now = pd.Timestamp.now(tz=None)
+      start_bin = window_start.to_period(freq).to_timestamp()
+      end_bin = now.to_period(freq).to_timestamp()
+      timeline = pd.date_range(start=start_bin, end=end_bin, freq=freq)
+      
       rows: List[Tuple[pd.Timestamp, str, float]] = []
-      for _, row in df.iterrows():
-         try:
-            sub = row.get('submit_time')
-            st = row.get('start_time')
-            q = row.get('queue')
-            nodes = int(row.get('nodes') or 0)
-            if pd.isna(sub) or pd.isna(st) or nodes <= 0:
+      
+      # For each time bin, calculate machine-hours
+      for t in timeline:
+         next_t_candidates = pd.date_range(start=t, periods=2, freq=freq)
+         next_t = next_t_candidates[-1] if len(next_t_candidates) == 2 else (t + pd.Timedelta(hours=24))
+         # Calculate hours in this time bin
+         hours_in_bin = (next_t - t).total_seconds() / 3600.0
+         
+         # Calculate total system capacity for this bin (node-hours)
+         total_capacity_node_hours = total_nodes * hours_in_bin
+         
+         # Group queued node-hours by queue for this time bin
+         queue_node_hours = {}
+         
+         # Find jobs that were queued during this time period [t, next_t)
+         for _, row in df.iterrows():
+            try:
+               sub = row.get('submit_time')
+               st = row.get('start_time') 
+               state = row.get('state')
+               q = row.get('queue')
+               req_node_hours = row.get('requested_node_hours', 0.0)
+               
+               if pd.isna(sub) or req_node_hours <= 0:
+                  continue
+               
+               # Convert to timestamps for comparison
+               sub_ts = pd.Timestamp(sub)
+               st_ts = pd.Timestamp(st) if not pd.isna(st) else now
+               
+               # Job is queued during [t, next_t) if:
+               # 1. Job was submitted before next_t, AND
+               # 2. Job was still queued after t (either not started yet, or started after t)
+               # 3. Job is in QUEUED state (for current jobs) OR started after t (for historical jobs)
+               is_queued_in_bin = (sub_ts < next_t and st_ts >= t and 
+                                 (pd.isna(st) or st_ts >= t))
+               # self.logger.debug(f"Job {row.get('job_id')} is queued in bin: {is_queued_in_bin} {sub_ts} {st_ts} {row.get('nodes')} {row.get('walltime_hours')} {req_node_hours}")
+               if is_queued_in_bin:
+                  queue_name = str(q) if q else 'unknown'
+                  if queue_name not in queue_node_hours:
+                     queue_node_hours[queue_name] = 0.0
+                  queue_node_hours[queue_name] += float(req_node_hours)
+               
+            except Exception:
                continue
-            if st <= window_start:
-               continue
-            start_bin = max(pd.Timestamp(sub).to_period(freq).to_timestamp(), window_start)
-            end_bin = pd.Timestamp(st).to_period(freq).to_timestamp()
-            if end_bin <= start_bin:
-               continue
-            timeline = pd.date_range(start=start_bin, end=end_bin, freq=freq, inclusive='left')
-            for idx, t in enumerate(timeline):
-               # compute hours in this period [t, next_t)
-               next_t_candidates = pd.date_range(start=t, periods=2, freq=freq)
-               next_t = next_t_candidates[-1] if len(next_t_candidates) == 2 else (t + pd.Timedelta(hours=24))
-               if next_t > end_bin:
-                  next_t = end_bin
-               hours = max(0.0, (next_t - t).total_seconds() / 3600.0)
-               mh = float(nodes) * float(hours)
-               if mh > 0:
-                  rows.append((t, str(q), mh))
-         except Exception:
-            continue
-
+         
+         # Convert to machine-hours and add to results
+         for queue_name, total_queued_node_hours in queue_node_hours.items():
+            if total_capacity_node_hours > 0:
+               machine_hours = total_queued_node_hours / total_capacity_node_hours
+               rows.append((t, queue_name, machine_hours))
       if not rows:
          return pd.DataFrame(columns=['timestamp', 'queue', 'machine_hours'])
       out = pd.DataFrame(rows, columns=['timestamp', 'queue', 'machine_hours'])
@@ -988,49 +1030,75 @@ class UsageInsights:
 
    def _detect_total_cluster_nodes(self) -> Optional[int]:
       """
-      Detect total number of cluster nodes by invoking 'pbsnodes'.
-      Prefers: pbsnodes -a -F dsv (1 line per node). Falls back to 'pbsnodes -a'.
-      Returns None if detection fails.
+      Detect total number of cluster nodes.
+      
+      Tries multiple approaches in order:
+      1. pbsnodes -a -F dsv (PBS command, preferred)
+      2. pbsnodes -a (PBS command, fallback)
+      3. Database node count (fallback if PBS unavailable)
+      
+      Returns None if all detection methods fail.
       """
+      # First try PBS commands
       try:
-         if shutil.which('pbsnodes') is None:
-            return None
-         # Preferred: one line per node
-         try:
-            result = subprocess.run(
-               ['pbsnodes', '-a', '-F', 'dsv'],
-               check=True,
-               capture_output=True,
-               text=True,
-               timeout=15
-            )
-            count = sum(1 for line in (result.stdout or '').splitlines() if line.strip())
-            if count > 0:
-               return int(count)
-         except Exception:
-            pass
-         # Fallback: generic output; approximate by counting non-empty lines that look like node records
-         try:
-            result2 = subprocess.run(
-               ['pbsnodes', '-a'],
-               check=True,
-               capture_output=True,
-               text=True,
-               timeout=15
-            )
-            # Heuristic: count lines that start new node sections, commonly like: 'Node: <name>'
-            lines = (result2.stdout or '').splitlines()
-            count2 = sum(1 for line in lines if line.strip().lower().startswith('node:'))
-            if count2 > 0:
-               return int(count2)
-            # As last resort, count blocks separated by blank lines
-            blocks = [b for b in (result2.stdout or '').split('\n\n') if b.strip()]
-            if blocks:
-               return int(len(blocks))
-         except Exception:
-            pass
+         if shutil.which('pbsnodes') is not None:
+            # Preferred: one line per node
+            try:
+               result = subprocess.run(
+                  ['pbsnodes', '-a', '-F', 'dsv'],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+                  timeout=15
+               )
+               count = sum(1 for line in (result.stdout or '').splitlines() if line.strip())
+               if count > 0:
+                  self.logger.debug(f"Detected {count} nodes via pbsnodes -a -F dsv")
+                  return int(count)
+            except Exception:
+               pass
+            
+            # Fallback: generic output; approximate by counting non-empty lines that look like node records
+            try:
+               result2 = subprocess.run(
+                  ['pbsnodes', '-a'],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+                  timeout=15
+               )
+               # Heuristic: count lines that start new node sections, commonly like: 'Node: <name>'
+               lines = (result2.stdout or '').splitlines()
+               count2 = sum(1 for line in lines if line.strip().lower().startswith('node:'))
+               if count2 > 0:
+                  self.logger.debug(f"Detected {count2} nodes via pbsnodes -a heuristic")
+                  return int(count2)
+               # As last resort, count blocks separated by blank lines
+               blocks = [b for b in (result2.stdout or '').split('\n\n') if b.strip()]
+               if blocks:
+                  count3 = len(blocks)
+                  self.logger.debug(f"Detected {count3} nodes via pbsnodes -a block counting")
+                  return int(count3)
+            except Exception:
+               pass
       except Exception:
-         return None
+         pass
+      
+      # If PBS commands fail, try database as fallback
+      try:
+         node_repo = self.repo_factory.get_node_repository()
+         nodes = node_repo.get_all_nodes()
+         if nodes:
+            # Only count active nodes
+            active_nodes = [n for n in nodes if getattr(n, 'is_active', True)]
+            count = len(active_nodes)
+            if count > 0:
+               self.logger.debug(f"Detected {count} nodes from database")
+               return int(count)
+      except Exception as e:
+         self.logger.debug(f"Failed to get node count from database: {e}")
+      
+      self.logger.warning("Could not determine total cluster nodes using any method")
       return None
 
 
