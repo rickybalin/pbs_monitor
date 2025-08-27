@@ -20,6 +20,8 @@ class NodeState(Enum):
    DOWN_OFFLINE = "down,offline"
    STATE_UNKNOWN_DOWN = "state-unknown,down"
    STATE_UNKNOWN_DOWN_OFFLINE = "state-unknown,down,offline"
+   JOB_EXCLUSIVE_RESV_EXCLUSIVE = "job-exclusive,resv-exclusive"
+   OFFLINE_RESV_EXCLUSIVE = "offline,resv-exclusive"
    UNKNOWN = "unknown"
 
 
