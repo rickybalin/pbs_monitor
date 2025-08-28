@@ -11,7 +11,7 @@ import pandas as pd
 from datetime import datetime
 
 from .commands import BaseCommand
-from ..analytics import RunScoreAnalyzer, WalltimeEfficiencyAnalyzer, ReservationUtilizationAnalyzer, ReservationTrendAnalyzer
+from ..analytics import RunScoreAnalyzer, WalltimeEfficiencyAnalyzer, ReservationUtilizationAnalyzer, ReservationTrendAnalyzer, LeaderboardAnalyzer, LeaderboardConfig
 from ..analytics.usage_insights import UsageInsights, QueueFilter
 
 
@@ -31,6 +31,7 @@ class AnalyzeCommand(BaseCommand):
          print("  reservation-trends           Analyze reservation usage trends over time")
          print("  reservation-owner-ranking    Analyze reservation usage by owner ranking")
          print("  usage-insights               Usage derived metrics and initial plots (Milestone 1)")
+         print("  leaderboard                  Show top users and projects by node-hours")
          print("\nExamples:")
          print("  pbs-monitor analyze run-now                    # Get a run-now suggestion")
          print("  pbs-monitor analyze run-score                    # Analyze job scores")
@@ -38,6 +39,8 @@ class AnalyzeCommand(BaseCommand):
          print("  pbs-monitor analyze reservation-utilization      # Analyze reservation usage")
          print("  pbs-monitor analyze reservation-utilization --status running  # Show only running reservations")
          print("  pbs-monitor analyze usage-insights --format csv  # Metrics CSV for last 30 days")
+         print("  pbs-monitor analyze leaderboard --days 7        # Top users/projects last 7 days")
+         print("  pbs-monitor analyze leaderboard --weeks 4       # Top users/projects per week for 4 weeks")
          print("\nUse 'pbs-monitor analyze <action> --help' for more information about each action")
          return 1
       elif args.analyze_action == "run-now":
@@ -56,9 +59,11 @@ class AnalyzeCommand(BaseCommand):
          return self._analyze_reservation_owner_ranking(args)
       elif args.analyze_action == "usage-insights":
          return self._analyze_usage_insights(args)
+      elif args.analyze_action == "leaderboard":
+         return self._analyze_leaderboard(args)
       else:
           self.logger.error(f"Unknown analyze action: {args.analyze_action}")
-          print("\nAvailable actions: run-score, walltime-efficiency-by-user, walltime-efficiency-by-project, reservation-utilization, reservation-trends, reservation-owner-ranking, usage-insights")
+          print("\nAvailable actions: run-score, walltime-efficiency-by-user, walltime-efficiency-by-project, reservation-utilization, reservation-trends, reservation-owner-ranking, usage-insights, leaderboard")
           return 1
 
    def _analyze_run_now(self, args: argparse.Namespace) -> int:
@@ -1096,4 +1101,147 @@ class AnalyzeCommand(BaseCommand):
             )
             self.console.print(table)
          else:
-            self.console.print("[yellow]No ranking data to display.[/yellow]") 
+            self.console.print("[yellow]No ranking data to display.[/yellow]")
+   
+   def _analyze_leaderboard(self, args: argparse.Namespace) -> int:
+      """Analyze leaderboard of top users and projects by node-hours"""
+      try:
+         # Get parameters
+         days = getattr(args, 'days', None)
+         weeks = getattr(args, 'weeks', None)
+         top_n = getattr(args, 'top_n', 10)
+         include_running = getattr(args, 'include_running', True)
+         include_queued = getattr(args, 'include_queued', False)
+         min_node_hours = getattr(args, 'min_node_hours', 1.0)
+         
+         # Validate parameters
+         if days and weeks:
+            self.console.print("[red]Error: Cannot specify both --days and --weeks[/red]")
+            return 1
+         
+         if not days and not weeks:
+            days = 30  # Default to 30 days
+         
+         # Create configuration
+         config = LeaderboardConfig(
+            days=days,
+            weeks=weeks,
+            top_n=top_n,
+            min_node_hours=min_node_hours,
+            include_running=include_running,
+            include_queued=include_queued
+         )
+         
+         # Initialize analyzer
+         analyzer = LeaderboardAnalyzer(data_collector=self.collector)
+         
+         # Perform analysis
+         if days:
+            self.console.print(f"[bold blue]Analyzing leaderboard for last {days} days...[/bold blue]")
+            results = analyzer.analyze_daily_leaderboard(config)
+            self._display_daily_leaderboard_results(results, args, days)
+         else:
+            self.console.print(f"[bold blue]Analyzing weekly leaderboard for last {weeks} weeks...[/bold blue]")
+            results = analyzer.analyze_weekly_leaderboard(config)
+            self._display_weekly_leaderboard_results(results, args, weeks)
+         
+         return 0
+         
+      except Exception as e:
+         self.logger.error(f"Error analyzing leaderboard: {str(e)}")
+         self.console.print(f"[red]Error: {str(e)}[/red]")
+         return 1
+   
+   def _display_daily_leaderboard_results(self, results: Dict[str, pd.DataFrame], args: argparse.Namespace, days: int) -> None:
+      """Display daily leaderboard results"""
+      output_format = getattr(args, 'format', 'table')
+      
+      # Display summary
+      self.console.print(f"\n[bold green]Leaderboard - Last {days} Days[/bold green]")
+      
+      users_df = results['users']
+      projects_df = results['projects']
+      
+      if output_format == 'csv':
+         # User preference for CSV output
+         self.console.print("# Top Users by Node-Hours")
+         if not users_df.empty:
+            self.console.print(users_df.to_csv(index=False))
+         else:
+            self.console.print("# No user data available")
+         
+         self.console.print("\n# Top Projects by Node-Hours")
+         if not projects_df.empty:
+            self.console.print(projects_df.to_csv(index=False))
+         else:
+            self.console.print("# No project data available")
+      else:
+         # Table format
+         if not users_df.empty:
+            users_table = self._create_table(
+               title=f"Top Users by Node-Hours (Last {days} Days)",
+               headers=list(users_df.columns),
+               rows=[[str(val) for val in row] for row in users_df.values]
+            )
+            self.console.print(users_table)
+         else:
+            self.console.print("[yellow]No user data available for the specified period.[/yellow]")
+         
+         if not projects_df.empty:
+            projects_table = self._create_table(
+               title=f"Top Projects by Node-Hours (Last {days} Days)",
+               headers=list(projects_df.columns),
+               rows=[[str(val) for val in row] for row in projects_df.values]
+            )
+            self.console.print(projects_table)
+         else:
+            self.console.print("[yellow]No project data available for the specified period.[/yellow]")
+   
+   def _display_weekly_leaderboard_results(self, results: Dict[str, pd.DataFrame], args: argparse.Namespace, weeks: int) -> None:
+      """Display weekly leaderboard results"""
+      output_format = getattr(args, 'format', 'table')
+      
+      # Display summary
+      self.console.print(f"\n[bold green]Weekly Leaderboard - Last {weeks} Weeks[/bold green]")
+      
+      users_df = results['users_by_week']
+      projects_df = results['projects_by_week']
+      
+      if output_format == 'csv':
+         # User preference for CSV output
+         self.console.print("# Top Users by Node-Hours (Per Week)")
+         if not users_df.empty:
+            self.console.print(users_df.to_csv(index=False))
+         else:
+            self.console.print("# No user data available")
+         
+         self.console.print("\n# Top Projects by Node-Hours (Per Week)")
+         if not projects_df.empty:
+            self.console.print(projects_df.to_csv(index=False))
+         else:
+            self.console.print("# No project data available")
+      else:
+         # Table format - show each week
+         if not users_df.empty:
+            for week in users_df['week'].unique():
+               week_users = users_df[users_df['week'] == week].drop('week', axis=1)
+               users_table = self._create_table(
+                  title=f"Top Users by Node-Hours - {week}",
+                  headers=list(week_users.columns),
+                  rows=[[str(val) for val in row] for row in week_users.values]
+               )
+               self.console.print(users_table)
+         else:
+            self.console.print("[yellow]No user data available for the specified period.[/yellow]")
+         
+         if not projects_df.empty:
+            for week in projects_df['week'].unique():
+               week_projects = projects_df[projects_df['week'] == week].drop('week', axis=1)
+               projects_table = self._create_table(
+                  title=f"Top Projects by Node-Hours - {week}",
+                  headers=list(week_projects.columns),
+                  rows=[[str(val) for val in row] for row in week_projects.values]
+               )
+               self.console.print(projects_table)
+         else:
+            self.console.print("[yellow]No project data available for the specified period.[/yellow]") 

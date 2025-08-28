@@ -623,6 +623,52 @@ Examples:
       help=argparse.SUPPRESS
    )
    
+   # Analyze leaderboard
+   leaderboard_parser = analyze_subparsers.add_parser(
+      "leaderboard",
+      help="Show top users and projects by node-hours"
+   )
+   leaderboard_parser.add_argument(
+      "-d", "--days",
+      type=int,
+      help="Number of days to analyze (default: 30 if neither --days nor --weeks specified)"
+   )
+   leaderboard_parser.add_argument(
+      "-w", "--weeks",
+      type=int,
+      help="Number of weeks to analyze (shows weekly breakdown)"
+   )
+   leaderboard_parser.add_argument(
+      "-n", "--top-n",
+      type=int,
+      default=10,
+      help="Number of top entries to show (default: 10)"
+   )
+   leaderboard_parser.add_argument(
+      "--min-node-hours",
+      type=float,
+      default=1.0,
+      help="Minimum node-hours to be included (default: 1.0)"
+   )
+   leaderboard_parser.add_argument(
+      "--include-running",
+      action="store_true",
+      default=True,
+      help="Include currently running jobs (default: True)"
+   )
+   leaderboard_parser.add_argument(
+      "--include-queued",
+      action="store_true",
+      default=False,
+      help="Include queued jobs with estimated node-hours (default: False)"
+   )
+   leaderboard_parser.add_argument(
+      "--format",
+      choices=["table", "csv"],
+      default="table",
+      help="Output format (default: table)"
+   )
+   
    # Config command
    config_parser = subparsers.add_parser(
       "config",

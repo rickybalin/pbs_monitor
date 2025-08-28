@@ -55,7 +55,7 @@ def generate_cli_reference(output_path: Path) -> None:
             sections.append(f"### resv {sub}\n\n")
             sections.append("```\n" + run(["pbs-monitor", "resv", sub, "--help"]) + "```\n\n")
       if cmd == "analyze":
-         for sub in ["run-score"]:
+         for sub in ["run-score", "leaderboard"]:
             sections.append(f"### analyze {sub}\n\n")
             sections.append("```\n" + run(["pbs-monitor", "analyze", sub, "--help"]) + "```\n\n")
 

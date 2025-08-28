@@ -9,11 +9,14 @@ from .queue_depth import QueueDepthCalculator
 from .run_score import RunScoreAnalyzer
 from .walltime_efficiency import WalltimeEfficiencyAnalyzer
 from .reservation_analysis import ReservationUtilizationAnalyzer, ReservationTrendAnalyzer
+from .leaderboard import LeaderboardAnalyzer, LeaderboardConfig
 
 __all__ = [
     'QueueDepthCalculator', 
     'RunScoreAnalyzer', 
     'WalltimeEfficiencyAnalyzer',
     'ReservationUtilizationAnalyzer',
-    'ReservationTrendAnalyzer'
+    'ReservationTrendAnalyzer',
+    'LeaderboardAnalyzer',
+    'LeaderboardConfig'
 ] 
