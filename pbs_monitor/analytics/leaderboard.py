@@ -20,6 +20,7 @@ from ..database.repositories import RepositoryFactory
 from ..database.models import Job, JobState
 from ..data_collector import DataCollector
 from ..models.job import PBSJob, JobState as PBSJobState
+from ..pbs_commands import PBSCommands
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,6 +44,32 @@ class LeaderboardAnalyzer:
         self.repo_factory = repository_factory or RepositoryFactory()
         self.data_collector = data_collector
         self.logger = logging.getLogger(__name__)
+        self._pbs_commands = None
+        self._total_nodes_cache = None
+
+    def _get_total_system_nodes(self) -> int:
+        """
+        Get the total number of system nodes using pbsnodes.
+        Results are cached to avoid multiple calls.
+        
+        Returns:
+            Total number of nodes in the system
+            
+        Raises:
+            Exception: If pbsnodes() call fails (propagated to user)
+        """
+        if self._total_nodes_cache is not None:
+            return self._total_nodes_cache
+        
+        if self._pbs_commands is None:
+            self._pbs_commands = PBSCommands()
+        
+        # Get all nodes - this will raise an exception if it fails
+        nodes = self._pbs_commands.pbsnodes()
+        self._total_nodes_cache = len(nodes)
+        
+        self.logger.debug(f"Found {self._total_nodes_cache} total system nodes")
+        return self._total_nodes_cache
 
     def analyze_daily_leaderboard(self, config: LeaderboardConfig) -> Dict[str, pd.DataFrame]:
         """
@@ -67,9 +94,11 @@ class LeaderboardAnalyzer:
                     'projects': pd.DataFrame(columns=['rank', 'project', 'total_node_hours', 'total_jobs', 'avg_nodes', 'avg_walltime_hours'])
                 }
             
-            # Calculate aggregations
-            users_df = self._aggregate_by_user(jobs, config.top_n)
-            projects_df = self._aggregate_by_project(jobs, config.top_n)
+            # Calculate aggregations with percentage data
+            total_nodes = self._get_total_system_nodes()
+            hours_in_window = config.days * 24
+            users_df = self._aggregate_by_user(jobs, config.top_n, total_nodes, hours_in_window)
+            projects_df = self._aggregate_by_project(jobs, config.top_n, total_nodes, hours_in_window)
             
             return {
                 'users': users_df,
@@ -106,14 +135,18 @@ class LeaderboardAnalyzer:
                 if jobs:
                     week_label = f"Week {week_num + 1} ({week_start.strftime('%m/%d')} - {current_week_end.strftime('%m/%d')})"
                     
+                    # Calculate aggregations with percentage data for this week
+                    total_nodes = self._get_total_system_nodes()
+                    hours_in_window = 7 * 24  # Each week is 7 days * 24 hours
+                    
                     # Users for this week
-                    users_df = self._aggregate_by_user(jobs, config.top_n)
+                    users_df = self._aggregate_by_user(jobs, config.top_n, total_nodes, hours_in_window)
                     if not users_df.empty:
                         users_df['week'] = week_label
                         weekly_results['users_by_week'].append(users_df)
                     
                     # Projects for this week
-                    projects_df = self._aggregate_by_project(jobs, config.top_n)
+                    projects_df = self._aggregate_by_project(jobs, config.top_n, total_nodes, hours_in_window)
                     if not projects_df.empty:
                         projects_df['week'] = week_label
                         weekly_results['projects_by_week'].append(projects_df)
@@ -261,7 +294,7 @@ class LeaderboardAnalyzer:
             self.logger.debug(f"Failed to convert PBSJob {pbs_job.job_id}: {e}")
             return None
 
-    def _aggregate_by_user(self, jobs: List[Job], top_n: int) -> pd.DataFrame:
+    def _aggregate_by_user(self, jobs: List[Job], top_n: int, total_nodes: Optional[int] = None, hours_in_window: Optional[int] = None) -> pd.DataFrame:
         """Aggregate jobs by user and calculate metrics"""
         user_stats = {}
         
@@ -295,26 +328,36 @@ class LeaderboardAnalyzer:
             avg_nodes = stats['total_nodes'] / stats['total_jobs'] if stats['total_jobs'] > 0 else 0
             avg_walltime = stats['total_walltime_hours'] / stats['total_jobs'] if stats['total_jobs'] > 0 else 0
             
+            # Format node hours with percentage if data is available
+            node_hours_str = str(round(stats['total_node_hours'], 2))
+            if total_nodes is not None and hours_in_window is not None:
+                total_available_node_hours = total_nodes * hours_in_window
+                if total_available_node_hours > 0:
+                    percentage = (stats['total_node_hours'] / total_available_node_hours) * 100
+                    node_hours_str = f"{round(stats['total_node_hours'], 2)} [{percentage:.1f}%]"
+            
             data.append({
                 'user': user,
-                'total_node_hours': round(stats['total_node_hours'], 2),
+                'total_node_hours': node_hours_str,
                 'total_jobs': stats['total_jobs'],
                 'avg_nodes': round(avg_nodes, 1),
-                'avg_walltime_hours': round(avg_walltime, 2)
+                'avg_walltime_hours': round(avg_walltime, 2),
+                '_sort_value': stats['total_node_hours']  # Keep raw value for sorting
             })
         
         if not data:
             return pd.DataFrame(columns=['rank', 'user', 'total_node_hours', 'total_jobs', 'avg_nodes', 'avg_walltime_hours'])
         
         df = pd.DataFrame(data)
-        df = df.sort_values('total_node_hours', ascending=False).head(top_n)
+        df = df.sort_values('_sort_value', ascending=False).head(top_n)
+        df = df.drop('_sort_value', axis=1)  # Remove the sorting column
         df['rank'] = range(1, len(df) + 1)
         
         # Reorder columns
         df = df[['rank', 'user', 'total_node_hours', 'total_jobs', 'avg_nodes', 'avg_walltime_hours']]
         return df.reset_index(drop=True)
 
-    def _aggregate_by_project(self, jobs: List[Job], top_n: int) -> pd.DataFrame:
+    def _aggregate_by_project(self, jobs: List[Job], top_n: int, total_nodes: Optional[int] = None, hours_in_window: Optional[int] = None) -> pd.DataFrame:
         """Aggregate jobs by project and calculate metrics"""
         project_stats = {}
         
@@ -347,19 +390,29 @@ class LeaderboardAnalyzer:
             avg_nodes = stats['total_nodes'] / stats['total_jobs'] if stats['total_jobs'] > 0 else 0
             avg_walltime = stats['total_walltime_hours'] / stats['total_jobs'] if stats['total_jobs'] > 0 else 0
             
+            # Format node hours with percentage if data is available
+            node_hours_str = str(round(stats['total_node_hours'], 2))
+            if total_nodes is not None and hours_in_window is not None:
+                total_available_node_hours = total_nodes * hours_in_window
+                if total_available_node_hours > 0:
+                    percentage = (stats['total_node_hours'] / total_available_node_hours) * 100
+                    node_hours_str = f"{round(stats['total_node_hours'], 2)} [{percentage:.1f}%]"
+            
             data.append({
                 'project': project,
-                'total_node_hours': round(stats['total_node_hours'], 2),
+                'total_node_hours': node_hours_str,
                 'total_jobs': stats['total_jobs'],
                 'avg_nodes': round(avg_nodes, 1),
-                'avg_walltime_hours': round(avg_walltime, 2)
+                'avg_walltime_hours': round(avg_walltime, 2),
+                '_sort_value': stats['total_node_hours']  # Keep raw value for sorting
             })
         
         if not data:
             return pd.DataFrame(columns=['rank', 'project', 'total_node_hours', 'total_jobs', 'avg_nodes', 'avg_walltime_hours'])
         
         df = pd.DataFrame(data)
-        df = df.sort_values('total_node_hours', ascending=False).head(top_n)
+        df = df.sort_values('_sort_value', ascending=False).head(top_n)
+        df = df.drop('_sort_value', axis=1)  # Remove the sorting column
         df['rank'] = range(1, len(df) + 1)
         
         # Reorder columns
