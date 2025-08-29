@@ -79,7 +79,7 @@ class UsageInsights:
       2) Are currently queued
 
       Columns include:
-      - job_id, owner, project, queue
+      - job_id, owner, project, queue, allocation_type
       - nodes, walltime_hours
       - submit_time, start_time, end_time
       - wait_time_hours, run_time_hours, requested_node_hours
@@ -97,7 +97,7 @@ class UsageInsights:
 
          if not jobs:
             return pd.DataFrame(columns=[
-               'job_id', 'owner', 'project', 'queue', 'nodes', 'walltime_hours',
+               'job_id', 'owner', 'project', 'queue', 'allocation_type', 'nodes', 'walltime_hours',
                'submit_time', 'start_time', 'end_time', 'wait_time_hours',
                'run_time_hours', 'requested_node_hours', 'start_score',
                'start_score_quantile', 'state'
@@ -117,6 +117,7 @@ class UsageInsights:
                   'owner': job.owner,
                   'project': job.project,
                   'queue': job.queue,
+                  'allocation_type': getattr(job, 'allocation_type', None),
                   'nodes': int(job.nodes or 0),
                   'walltime_hours': float(walltime_hours),
                   'submit_time': job.submit_time,
@@ -258,6 +259,35 @@ class UsageInsights:
       except Exception as e:
          self.logger.debug(f"Plot ecdf_wait_by_queue failed: {e}")
 
+      # 4b) ECDF of wait time by allocation type
+      try:
+         fig, ax = plt.subplots(figsize=(14, 6))
+         # Filter out null allocation types and group by allocation type
+         df_alloc = df.dropna(subset=['allocation_type'])
+         if not df_alloc.empty:
+            # Build consistent palette for allocation types
+            alloc_types = sorted(df_alloc['allocation_type'].astype(str).unique().tolist())
+            alloc_palette = self._build_allocation_palette(alloc_types)
+            
+            for alloc_type, sub in df_alloc.groupby('allocation_type'):
+               x = np.sort(sub['wait_time_hours'].dropna().values)
+               if x.size == 0:
+                  continue
+               y = np.arange(1, x.size + 1) / x.size
+               ax.step(x, y, where='post', label=str(alloc_type), color=alloc_palette.get(str(alloc_type)))
+            ax.set_xscale('log')
+            ax.set_xlabel('Wait time (hours, log)')
+            ax.set_ylabel('ECDF')
+            ax.set_title('ECDF of wait time by allocation type')
+            ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Allocation Type', frameon=False)
+            if save_dir:
+               pth = os.path.join(save_dir, 'ecdf_wait_by_allocation_type.png')
+               fig.savefig(pth, bbox_inches='tight', dpi=dpi)
+               outputs['ecdf_wait_by_allocation_type'] = pth
+         plt.close(fig)
+      except Exception as e:
+         self.logger.debug(f"Plot ecdf_wait_by_allocation_type failed: {e}")
+
       # 5) Rolling median start-score over time (per queue)
       try:
          fig, ax = plt.subplots(figsize=(14, 6))
@@ -333,17 +363,17 @@ class UsageInsights:
          queues = []
       queue_palette = self._build_queue_palette(queues)
 
-      # ---- Throughput over time (node-hours started per period) by queue ----
+      # ---- Throughput over time (used node-hours started per period) by queue ----
       try:
-         th_df = self._compute_throughput_timeseries(df, window_start, freq=ts_freq)
+         th_df = self._compute_used_node_hours_by_queue_timeseries(df, window_start, freq=ts_freq)
          if not th_df.empty:
-            pivot = th_df.pivot_table(index='timestamp', columns='queue', values='node_hours', aggfunc='sum').fillna(0.0)
+            pivot = th_df.pivot_table(index='timestamp', columns='queue', values='used_node_hours', aggfunc='sum').fillna(0.0)
             fig, ax = plt.subplots(figsize=(14, 6))
             color_order = [queue_palette.get(str(c)) for c in pivot.columns]
             pivot.plot.area(ax=ax, color=color_order)
-            ax.set_title(f'Throughput over time (requested node-hours started per {ts_freq})')
+            ax.set_title(f'Throughput over time (used node-hours started per {ts_freq})')
             ax.set_xlabel('Time')
-            ax.set_ylabel('Requested node-hours started')
+            ax.set_ylabel('Used node-hours started')
             ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Queue', frameon=False)
             if save_dir:
                pth = os.path.join(save_dir, f'throughput_node_hours_per_{ts_freq}.png')
@@ -352,6 +382,29 @@ class UsageInsights:
             plt.close(fig)
       except Exception as e:
          self.logger.debug(f"Plot throughput_node_hours failed: {e}")
+
+      # ---- Throughput over time (used node-hours started per period) by allocation type ----
+      try:
+         th_alloc_df = self._compute_used_node_hours_by_allocation_timeseries(df, window_start, freq=ts_freq)
+         if not th_alloc_df.empty:
+            pivot = th_alloc_df.pivot_table(index='timestamp', columns='allocation_type', values='used_node_hours', aggfunc='sum').fillna(0.0)
+            fig, ax = plt.subplots(figsize=(14, 6))
+            # Build consistent palette for allocation types
+            alloc_types = sorted(pivot.columns.astype(str).tolist())
+            alloc_palette = self._build_allocation_palette(alloc_types)
+            color_order = [alloc_palette.get(str(c)) for c in pivot.columns]
+            pivot.plot.area(ax=ax, color=color_order)
+            ax.set_title(f'Throughput over time by allocation type (used node-hours started per {ts_freq})')
+            ax.set_xlabel('Time')
+            ax.set_ylabel('Used node-hours started')
+            ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Allocation Type', frameon=False)
+            if save_dir:
+               pth = os.path.join(save_dir, f'throughput_node_hours_by_allocation_per_{ts_freq}.png')
+               fig.savefig(pth, bbox_inches='tight', dpi=dpi)
+               outputs['throughput_node_hours_by_allocation'] = pth
+            plt.close(fig)
+      except Exception as e:
+         self.logger.debug(f"Plot throughput_node_hours_by_allocation failed: {e}")
 
       # ---- Queue depth over time (machine-hours queued) by queue ----
       try:
@@ -367,12 +420,36 @@ class UsageInsights:
             ax.set_ylabel('Machine-hours queued')
             ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Queue', frameon=False)
             if save_dir:
-               pth = os.path.join(save_dir, f'queue_depth_node_hours_per_{ts_freq}.png')
+               pth = os.path.join(save_dir, f'queue_depth_machine_hours_per_{ts_freq}.png')
                fig.savefig(pth, bbox_inches='tight', dpi=dpi)
-               outputs['backlog_node_hours'] = pth
+               outputs['queue_depth_machine_hours'] = pth
             plt.close(fig)
       except Exception as e:
          self.logger.debug(f"Plot backlog_node_hours failed: {e}")
+
+      # ---- Queue depth over time (machine-hours queued) by allocation type ----
+      try:
+         bl_df_alloc = self._compute_backlog_timeseries_by_allocation(df, window_start, freq=ts_freq)
+         self.logger.debug(f"Backlog timeseries by allocation: {bl_df_alloc}")
+         if not bl_df_alloc.empty:
+            pivot = bl_df_alloc.pivot_table(index='timestamp', columns='allocation_type', values='machine_hours', aggfunc='sum').fillna(0.0)
+            fig, ax = plt.subplots(figsize=(14, 6))
+            # Build consistent palette for allocation types
+            alloc_types = sorted(pivot.columns.astype(str).tolist())
+            alloc_palette = self._build_allocation_palette(alloc_types)
+            color_order = [alloc_palette.get(str(c)) for c in pivot.columns]
+            pivot.plot.area(ax=ax, color=color_order)
+            ax.set_title(f'Queue depth over time by allocation type (machine-hours queued per {ts_freq})')
+            ax.set_xlabel('Time')
+            ax.set_ylabel('Machine-hours queued')
+            ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Allocation Type', frameon=False)
+            if save_dir:
+               pth = os.path.join(save_dir, f'queue_depth_machine_hours_by_allocation_per_{ts_freq}.png')
+               fig.savefig(pth, bbox_inches='tight', dpi=dpi)
+               outputs['queue_depth_machine_hours_by_allocation'] = pth
+            plt.close(fig)
+      except Exception as e:
+         self.logger.debug(f"Plot queue_depth_machine_hours_by_allocation failed: {e}")
 
       # ---- Current wait time distribution by queue ----
       try:
@@ -414,25 +491,25 @@ class UsageInsights:
       except Exception as e:
          self.logger.debug(f"Plot current_wait_distribution failed: {e}")
 
-      # ---- Active nodes over time by queue ----
-      try:
-         an_df = self._compute_active_nodes_timeseries(df, window_start, freq=ts_freq)
-         if not an_df.empty:
-            pivot = an_df.pivot_table(index='timestamp', columns='queue', values='nodes', aggfunc='sum').fillna(0.0)
-            fig, ax = plt.subplots(figsize=(14, 6))
-            color_order = [queue_palette.get(str(c)) for c in pivot.columns]
-            pivot.plot.area(ax=ax, color=color_order)
-            ax.set_title(f'Active nodes over time by queue (per {ts_freq})')
-            ax.set_xlabel('Time')
-            ax.set_ylabel('Active nodes')
-            ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Queue', frameon=False)
-            if save_dir:
-               pth = os.path.join(save_dir, f'active_nodes_per_{ts_freq}.png')
-               fig.savefig(pth, bbox_inches='tight', dpi=dpi)
-               outputs['active_nodes'] = pth
-            plt.close(fig)
-      except Exception as e:
-         self.logger.debug(f"Plot active_nodes failed: {e}")
+      # # ---- Active nodes over time by queue ----
+      # try:
+      #    an_df = self._compute_active_nodes_timeseries(df, window_start, freq=ts_freq)
+      #    if not an_df.empty:
+      #       pivot = an_df.pivot_table(index='timestamp', columns='queue', values='nodes', aggfunc='sum').fillna(0.0)
+      #       fig, ax = plt.subplots(figsize=(14, 6))
+      #       color_order = [queue_palette.get(str(c)) for c in pivot.columns]
+      #       pivot.plot.area(ax=ax, color=color_order)
+      #       ax.set_title(f'Active nodes over time by queue (per {ts_freq})')
+      #       ax.set_xlabel('Time')
+      #       ax.set_ylabel('Active nodes')
+      #       ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Queue', frameon=False)
+      #       if save_dir:
+      #          pth = os.path.join(save_dir, f'active_nodes_per_{ts_freq}.png')
+      #          fig.savefig(pth, bbox_inches='tight', dpi=dpi)
+      #          outputs['active_nodes'] = pth
+      #       plt.close(fig)
+      # except Exception as e:
+      #    self.logger.debug(f"Plot active_nodes failed: {e}")
 
       # ---- Utilization: percent of capacity used per period ----
       try:
@@ -591,6 +668,7 @@ class UsageInsights:
                self.owner = pbs_job.owner
                self.project = pbs_job.project
                self.queue = pbs_job.queue
+               self.allocation_type = pbs_job.allocation_type
                self.nodes = pbs_job.nodes
                self.walltime = pbs_job.walltime
                self.submit_time = pbs_job.submit_time
@@ -759,6 +837,33 @@ class UsageInsights:
          palette[str(q)] = color
       return palette
 
+   def _build_allocation_palette(self, alloc_types: List[str]) -> Dict[str, str]:
+      """Return a deterministic mapping from allocation type to color."""
+      palette: Dict[str, str] = {}
+      if not alloc_types:
+         return palette
+      try:
+         base_colors = sns.color_palette('Set2', n_colors=max(3, len(alloc_types)))
+      except Exception:
+         # Fallback basic colors if seaborn unavailable
+         base_colors = [
+            (0.400, 0.760, 0.647), (0.988, 0.553, 0.384), (0.553, 0.627, 0.796),
+            (0.906, 0.541, 0.765), (0.651, 0.847, 0.329), (1.0, 0.851, 0.184),
+            (0.898, 0.769, 0.580), (0.702, 0.702, 0.702)
+         ]
+         # Repeat if necessary
+         if len(base_colors) < len(alloc_types):
+            k = int(math.ceil(len(alloc_types) / float(len(base_colors))))
+            base_colors = (base_colors * k)[:len(alloc_types)]
+      for idx, alloc_type in enumerate(alloc_types):
+         color = base_colors[idx % len(base_colors)]
+         try:
+            color = sns.utils.hex_color(color) if hasattr(sns.utils, 'hex_color') else color
+         except Exception:
+            pass
+         palette[str(alloc_type)] = color
+      return palette
+
    # --------- Time series helpers for Milestone 2 ---------
    def _compute_throughput_timeseries(self, df: pd.DataFrame, window_start: pd.Timestamp, freq: str = 'D') -> pd.DataFrame:
       """Aggregate requested node-hours started per period by queue."""
@@ -868,6 +973,94 @@ class UsageInsights:
       )
       return out
 
+   def _compute_backlog_timeseries_by_allocation(self, df: pd.DataFrame, window_start: pd.Timestamp, freq: str = 'D') -> pd.DataFrame:
+      """
+      Calculate machine-hours queued over time by allocation type.
+      
+      Similar to _compute_backlog_timeseries but groups by allocation_type instead of queue.
+      
+      Returns columns: ['timestamp', 'allocation_type', 'machine_hours']
+      """
+      if df.empty:
+         return pd.DataFrame(columns=['timestamp', 'allocation_type', 'machine_hours'])
+
+      # Get total number of nodes in the system
+      total_nodes = self._detect_total_cluster_nodes()
+      if not total_nodes or total_nodes <= 0:
+         self.logger.warning("Could not determine total cluster nodes, using fallback of 1000")
+         total_nodes = 1000  # Fallback value
+      
+      # Generate timeline bins for the analysis window
+      now = pd.Timestamp.now(tz=None)
+      start_bin = window_start.to_period(freq).to_timestamp()
+      end_bin = now.to_period(freq).to_timestamp()
+      timeline = pd.date_range(start=start_bin, end=end_bin, freq=freq)
+      
+      rows: List[Tuple[pd.Timestamp, str, float]] = []
+      
+      # For each time bin, calculate machine-hours
+      for t in timeline:
+         next_t_candidates = pd.date_range(start=t, periods=2, freq=freq)
+         next_t = next_t_candidates[-1] if len(next_t_candidates) == 2 else (t + pd.Timedelta(hours=24))
+         # Calculate hours in this time bin
+         hours_in_bin = (next_t - t).total_seconds() / 3600.0
+         
+         # Calculate total system capacity for this bin (node-hours)
+         total_capacity_node_hours = total_nodes * hours_in_bin
+         
+         # Group queued node-hours by allocation type for this time bin
+         alloc_node_hours = {}
+         
+         # Find jobs that were queued during this time period [t, next_t)
+         for _, row in df.iterrows():
+            try:
+               sub = row.get('submit_time')
+               st = row.get('start_time') 
+               state = row.get('state')
+               alloc_type = row.get('allocation_type')
+               req_node_hours = row.get('requested_node_hours', 0.0)
+               
+               if pd.isna(sub) or req_node_hours <= 0 or pd.isna(alloc_type):
+                  continue
+               
+               # Convert to timestamps for comparison
+               sub_ts = pd.Timestamp(sub)
+               st_ts = pd.Timestamp(st) if not pd.isna(st) else now
+               
+               # Job is queued during [t, next_t) if:
+               # 1. Job was submitted before next_t, AND
+               # 2. Job was still queued after t (either not started yet, or started after t)
+               # 3. Job is in QUEUED state (for current jobs) OR started after t (for historical jobs)
+               is_queued_in_bin = (sub_ts < next_t and st_ts >= t and 
+                                 (pd.isna(st) or st_ts >= t))
+               
+               if is_queued_in_bin:
+                  alloc_name = str(alloc_type)
+                  if alloc_name not in alloc_node_hours:
+                     alloc_node_hours[alloc_name] = 0.0
+                  alloc_node_hours[alloc_name] += float(req_node_hours)
+               
+            except Exception:
+               continue
+         
+         # Convert to machine-hours and add to results
+         for alloc_name, total_queued_node_hours in alloc_node_hours.items():
+            if total_capacity_node_hours > 0:
+               machine_hours = total_queued_node_hours / total_capacity_node_hours
+               rows.append((t, alloc_name, machine_hours))
+      
+      if not rows:
+         return pd.DataFrame(columns=['timestamp', 'allocation_type', 'machine_hours'])
+      
+      out = pd.DataFrame(rows, columns=['timestamp', 'allocation_type', 'machine_hours'])
+      out = (
+         out.groupby(['timestamp', 'allocation_type'])['machine_hours']
+            .sum()
+            .reset_index()
+            .sort_values('timestamp')
+      )
+      return out
+
    def _compute_active_nodes_timeseries(self, df: pd.DataFrame, window_start: pd.Timestamp, freq: str = 'D') -> pd.DataFrame:
       """Sum active nodes per timestamp by queue based on job run intervals."""
       if df.empty:
@@ -950,6 +1143,106 @@ class UsageInsights:
       out = pd.DataFrame(rows, columns=['timestamp', 'used_node_hours'])
       out = (
          out.groupby(['timestamp'])['used_node_hours']
+            .sum()
+            .reset_index()
+            .sort_values('timestamp')
+      )
+      return out
+
+   def _compute_used_node_hours_by_queue_timeseries(self, df: pd.DataFrame, window_start: pd.Timestamp, freq: str = 'D') -> pd.DataFrame:
+      """
+      Aggregate actual used node-hours per period by queue.
+      Computes sum over jobs of nodes × overlap_hours between job [start,end) and each period [t, next_t).
+      Returns columns: ['timestamp', 'queue', 'used_node_hours']
+      """
+      if df.empty:
+         return pd.DataFrame(columns=['timestamp', 'queue', 'used_node_hours'])
+
+      rows: List[Tuple[pd.Timestamp, str, float]] = []
+      for _, row in df.iterrows():
+         try:
+            st = row.get('start_time')
+            en = row.get('end_time')
+            queue = row.get('queue')
+            nodes = int(row.get('nodes') or 0)
+            if pd.isna(st) or pd.isna(en) or nodes <= 0 or pd.isna(queue):
+               continue
+            if en <= window_start:
+               continue
+            start_bin = max(pd.Timestamp(st).to_period(freq).to_timestamp(), window_start)
+            end_bin = pd.Timestamp(en).to_period(freq).to_timestamp()
+            if end_bin < start_bin:
+               end_bin = start_bin
+            timeline = pd.date_range(start=start_bin, end=end_bin, freq=freq)
+            if len(timeline) == 0:
+               timeline = pd.DatetimeIndex([start_bin])
+            for t in timeline:
+               next_t_candidates = pd.date_range(start=t, periods=2, freq=freq)
+               next_t = next_t_candidates[-1] if len(next_t_candidates) == 2 else (t + pd.Timedelta(hours=24))
+               # overlap within [t, next_t)
+               seg_start = max(pd.Timestamp(st), t)
+               seg_end = min(pd.Timestamp(en), next_t)
+               hours = max(0.0, (seg_end - seg_start).total_seconds() / 3600.0)
+               if hours > 0.0:
+                  rows.append((t, str(queue), float(nodes) * float(hours)))
+         except Exception:
+            continue
+
+      if not rows:
+         return pd.DataFrame(columns=['timestamp', 'queue', 'used_node_hours'])
+      out = pd.DataFrame(rows, columns=['timestamp', 'queue', 'used_node_hours'])
+      out = (
+         out.groupby(['timestamp', 'queue'])['used_node_hours']
+            .sum()
+            .reset_index()
+            .sort_values('timestamp')
+      )
+      return out
+
+   def _compute_used_node_hours_by_allocation_timeseries(self, df: pd.DataFrame, window_start: pd.Timestamp, freq: str = 'D') -> pd.DataFrame:
+      """
+      Aggregate actual used node-hours per period by allocation type.
+      Computes sum over jobs of nodes × overlap_hours between job [start,end) and each period [t, next_t).
+      Returns columns: ['timestamp', 'allocation_type', 'used_node_hours']
+      """
+      if df.empty:
+         return pd.DataFrame(columns=['timestamp', 'allocation_type', 'used_node_hours'])
+
+      rows: List[Tuple[pd.Timestamp, str, float]] = []
+      for _, row in df.iterrows():
+         try:
+            st = row.get('start_time')
+            en = row.get('end_time')
+            allocation_type = row.get('allocation_type')
+            nodes = int(row.get('nodes') or 0)
+            if pd.isna(st) or pd.isna(en) or nodes <= 0 or pd.isna(allocation_type):
+               continue
+            if en <= window_start:
+               continue
+            start_bin = max(pd.Timestamp(st).to_period(freq).to_timestamp(), window_start)
+            end_bin = pd.Timestamp(en).to_period(freq).to_timestamp()
+            if end_bin < start_bin:
+               end_bin = start_bin
+            timeline = pd.date_range(start=start_bin, end=end_bin, freq=freq)
+            if len(timeline) == 0:
+               timeline = pd.DatetimeIndex([start_bin])
+            for t in timeline:
+               next_t_candidates = pd.date_range(start=t, periods=2, freq=freq)
+               next_t = next_t_candidates[-1] if len(next_t_candidates) == 2 else (t + pd.Timedelta(hours=24))
+               # overlap within [t, next_t)
+               seg_start = max(pd.Timestamp(st), t)
+               seg_end = min(pd.Timestamp(en), next_t)
+               hours = max(0.0, (seg_end - seg_start).total_seconds() / 3600.0)
+               if hours > 0.0:
+                  rows.append((t, str(allocation_type), float(nodes) * float(hours)))
+         except Exception:
+            continue
+
+      if not rows:
+         return pd.DataFrame(columns=['timestamp', 'allocation_type', 'used_node_hours'])
+      out = pd.DataFrame(rows, columns=['timestamp', 'allocation_type', 'used_node_hours'])
+      out = (
+         out.groupby(['timestamp', 'allocation_type'])['used_node_hours']
             .sum()
             .reset_index()
             .sort_values('timestamp')

@@ -586,6 +586,7 @@ Examples:
    )
    usage_insights_parser.add_argument(
        "-o", "--output-dir",
+       default="plots",
       help="Directory to save plots"
    )
    usage_insights_parser.add_argument(
