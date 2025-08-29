@@ -44,6 +44,7 @@ from ..database.repositories import RepositoryFactory
 from ..database.models import Job, JobHistory, JobState
 from ..data_collector import DataCollector
 from ..models.job import PBSJob, JobState as PBSJobState
+from ..pbs_commands import PBSCommands
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -886,23 +887,32 @@ class UsageInsights:
       """
       Calculate machine-hours queued over time by queue.
       
-      Machine-hours = (sum of queued node-hours in bin) / (total system nodes * hours in bin)
+      Machine-hours = (sum of queued node-hours) / total_system_nodes
+      This gives the fraction of the total system that would be consumed.
       
       For each time bin:
       1. Find all jobs in QUEUED state during that time period
       2. Sum their requested_node_hours (nodes × walltime_hours) 
-      3. Normalize by total system capacity (total_nodes × hours_in_bin)
+      3. Divide by total system nodes to get machine-hours fraction
       
       Returns columns: ['timestamp', 'queue', 'machine_hours']
       """
       if df.empty:
          return pd.DataFrame(columns=['timestamp', 'queue', 'machine_hours'])
 
-      # Get total number of nodes in the system
-      total_nodes = self._detect_total_cluster_nodes()
-      if not total_nodes or total_nodes <= 0:
-         self.logger.warning("Could not determine total cluster nodes, using fallback of 1000")
-         total_nodes = 1000  # Fallback value
+      # Get total nodes from PBS for machine-hours calculation
+      total_nodes = self._get_total_nodes_from_pbs()
+      
+      if total_nodes and total_nodes > 0:
+         # Use actual node count for machine-hours calculation
+         self.logger.debug(f"Using machine-hours calculation with {total_nodes} total nodes")
+      else:
+         # Fallback: try the old detection method
+         self.logger.debug("PBS node count unavailable, trying fallback detection")
+         total_nodes = self._detect_total_cluster_nodes()
+         if not total_nodes or total_nodes <= 0:
+            self.logger.warning("Could not determine total cluster nodes, using fallback of 1000")
+            total_nodes = 1000  # Fallback value
       
       # Generate timeline bins for the analysis window
       now = pd.Timestamp.now(tz=None)
@@ -916,11 +926,6 @@ class UsageInsights:
       for t in timeline:
          next_t_candidates = pd.date_range(start=t, periods=2, freq=freq)
          next_t = next_t_candidates[-1] if len(next_t_candidates) == 2 else (t + pd.Timedelta(hours=24))
-         # Calculate hours in this time bin
-         hours_in_bin = (next_t - t).total_seconds() / 3600.0
-         
-         # Calculate total system capacity for this bin (node-hours)
-         total_capacity_node_hours = total_nodes * hours_in_bin
          
          # Group queued node-hours by queue for this time bin
          queue_node_hours = {}
@@ -959,9 +964,10 @@ class UsageInsights:
          
          # Convert to machine-hours and add to results
          for queue_name, total_queued_node_hours in queue_node_hours.items():
-            if total_capacity_node_hours > 0:
-               machine_hours = total_queued_node_hours / total_capacity_node_hours
-               rows.append((t, queue_name, machine_hours))
+            # Machine-hours: queued node-hours / total system nodes
+            # This gives the fraction of the system that would be consumed
+            machine_hours = total_queued_node_hours / total_nodes
+            rows.append((t, queue_name, machine_hours))
       if not rows:
          return pd.DataFrame(columns=['timestamp', 'queue', 'machine_hours'])
       out = pd.DataFrame(rows, columns=['timestamp', 'queue', 'machine_hours'])
@@ -977,6 +983,9 @@ class UsageInsights:
       """
       Calculate machine-hours queued over time by allocation type.
       
+      Machine-hours = (sum of queued node-hours) / total_system_nodes
+      This gives the fraction of the total system that would be consumed.
+      
       Similar to _compute_backlog_timeseries but groups by allocation_type instead of queue.
       
       Returns columns: ['timestamp', 'allocation_type', 'machine_hours']
@@ -984,11 +993,19 @@ class UsageInsights:
       if df.empty:
          return pd.DataFrame(columns=['timestamp', 'allocation_type', 'machine_hours'])
 
-      # Get total number of nodes in the system
-      total_nodes = self._detect_total_cluster_nodes()
-      if not total_nodes or total_nodes <= 0:
-         self.logger.warning("Could not determine total cluster nodes, using fallback of 1000")
-         total_nodes = 1000  # Fallback value
+      # Get total nodes from PBS for machine-hours calculation
+      total_nodes = self._get_total_nodes_from_pbs()
+      
+      if total_nodes and total_nodes > 0:
+         # Use actual node count for machine-hours calculation
+         self.logger.debug(f"Using machine-hours calculation with {total_nodes} total nodes")
+      else:
+         # Fallback: try the old detection method
+         self.logger.debug("PBS node count unavailable, trying fallback detection")
+         total_nodes = self._detect_total_cluster_nodes()
+         if not total_nodes or total_nodes <= 0:
+            self.logger.warning("Could not determine total cluster nodes, using fallback of 1000")
+            total_nodes = 1000  # Fallback value
       
       # Generate timeline bins for the analysis window
       now = pd.Timestamp.now(tz=None)
@@ -1002,11 +1019,6 @@ class UsageInsights:
       for t in timeline:
          next_t_candidates = pd.date_range(start=t, periods=2, freq=freq)
          next_t = next_t_candidates[-1] if len(next_t_candidates) == 2 else (t + pd.Timedelta(hours=24))
-         # Calculate hours in this time bin
-         hours_in_bin = (next_t - t).total_seconds() / 3600.0
-         
-         # Calculate total system capacity for this bin (node-hours)
-         total_capacity_node_hours = total_nodes * hours_in_bin
          
          # Group queued node-hours by allocation type for this time bin
          alloc_node_hours = {}
@@ -1045,9 +1057,10 @@ class UsageInsights:
          
          # Convert to machine-hours and add to results
          for alloc_name, total_queued_node_hours in alloc_node_hours.items():
-            if total_capacity_node_hours > 0:
-               machine_hours = total_queued_node_hours / total_capacity_node_hours
-               rows.append((t, alloc_name, machine_hours))
+            # Machine-hours: queued node-hours / total system nodes
+            # This gives the fraction of the system that would be consumed
+            machine_hours = total_queued_node_hours / total_nodes
+            rows.append((t, alloc_name, machine_hours))
       
       if not rows:
          return pd.DataFrame(columns=['timestamp', 'allocation_type', 'machine_hours'])
@@ -1320,6 +1333,51 @@ class UsageInsights:
       )
       
       return counts
+
+   def _get_total_nodes_from_pbs(self) -> Optional[int]:
+      """
+      Get the total number of nodes from PBS using pbsnodes JSON output.
+      
+      Returns the count of nodes from the PBS system, or None if unavailable.
+      """
+      try:
+         # Use PBSCommands to get raw node data as JSON
+         pbs_commands = PBSCommands(use_sample_data=False)
+         
+         # Get the raw JSON data directly
+         import subprocess
+         result = subprocess.run(
+            ['pbsnodes', '-a', '-F', 'json'],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30
+         )
+         
+         if result.returncode == 0:
+            import json
+            node_data = json.loads(result.stdout)
+            total_nodes = len(node_data.get('nodes', {}))
+            
+            if total_nodes > 0:
+               self.logger.debug(f"Found {total_nodes} total nodes from pbsnodes")
+               return total_nodes
+            else:
+               self.logger.warning("No nodes found in pbsnodes output")
+               return None
+         else:
+            self.logger.warning("pbsnodes command failed")
+            return None
+            
+      except subprocess.TimeoutExpired:
+         self.logger.warning("pbsnodes command timed out")
+         return None
+      except json.JSONDecodeError as e:
+         self.logger.warning(f"Failed to parse pbsnodes JSON output: {e}")
+         return None
+      except Exception as e:
+         self.logger.warning(f"Failed to get node count from PBS: {e}")
+         return None
 
    def _detect_total_cluster_nodes(self) -> Optional[int]:
       """
