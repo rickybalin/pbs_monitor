@@ -327,7 +327,8 @@ class JobsCommand(BaseCommand):
          'priority': lambda j: j.priority,
          'cores': lambda j: j.estimated_total_cores(),
          'score': lambda j: j.score if j.score is not None else -1,  # Put jobs without scores at the end
-         'queue_time': lambda j: self._calculate_current_queue_seconds(j)
+         'queue_time': lambda j: self._calculate_current_queue_seconds(j),
+         'node_hours': lambda j: self._calculate_node_hours(j)
       }
       
       if sort_key in sort_functions:
@@ -342,7 +343,7 @@ class JobsCommand(BaseCommand):
       # Determine columns
       columns = args.columns.split(',') if args.columns else self.config.display.default_job_columns
       
-      # Create table data
+            # Create table data
       headers = []
       column_formatters = {
          'job_id': lambda j: format_job_id(j.job_id),
@@ -361,8 +362,9 @@ class JobsCommand(BaseCommand):
          'runtime': lambda j: j.runtime_duration() or 'N/A',
          'priority': lambda j: format_number(j.priority),
          'cores': lambda j: format_number(j.estimated_total_cores()),
-                  'score': lambda j: j.format_score(),
-         'queue_time': lambda j: self._format_queue_time(j)
+         'score': lambda j: j.format_score(),
+         'queue_time': lambda j: self._format_queue_time(j),
+         'node_hours': lambda j: f"{self._calculate_node_hours(j):.1f}"
       }
 
       # Build headers and rows
@@ -380,6 +382,9 @@ class JobsCommand(BaseCommand):
       
       # Print table
       self._print_table(f"Jobs ({len(jobs)} total)", headers, rows)
+      
+      # Print summary statistics
+      self._print_job_summary_statistics(jobs)
       
       # Handle database collection if requested
       self._handle_collection_if_requested(args)
@@ -411,6 +416,82 @@ class JobsCommand(BaseCommand):
       if seconds >= 0:
          return format_duration(seconds)
       return "N/A"
+
+   def _parse_walltime_to_hours(self, walltime: str) -> float:
+      """
+      Parse walltime string to hours
+      
+      Args:
+         walltime: Walltime string in format HH:MM:SS or DD:HH:MM:SS
+         
+      Returns:
+         Walltime in hours as float
+      """
+      if not walltime:
+         return 0.0
+      
+      try:
+         parts = walltime.split(':')
+         if len(parts) == 3:
+            # HH:MM:SS format
+            hours, minutes, seconds = map(int, parts)
+            return hours + minutes / 60.0 + seconds / 3600.0
+         elif len(parts) == 4:
+            # DD:HH:MM:SS format
+            days, hours, minutes, seconds = map(int, parts)
+            return days * 24 + hours + minutes / 60.0 + seconds / 3600.0
+         else:
+            return 0.0
+      except (ValueError, TypeError):
+         return 0.0
+
+   def _calculate_node_hours(self, job: PBSJob) -> float:
+      """Calculate requested node-hours for a job"""
+      if not job.nodes or not job.walltime:
+         return 0.0
+      
+      walltime_hours = self._parse_walltime_to_hours(job.walltime)
+      return job.nodes * walltime_hours
+
+   def _print_job_summary_statistics(self, jobs: List[PBSJob]) -> None:
+      """Print summary statistics for jobs"""
+      from collections import defaultdict
+      
+      if not jobs:
+         return
+      
+      print(f"\nJob Summary Statistics")
+      print("=" * 50)
+      
+      # Calculate basic statistics
+      total_jobs = len(jobs)
+      total_node_hours = sum(self._calculate_node_hours(job) for job in jobs)
+      
+      # Group by queue
+      queue_stats = defaultdict(lambda: {'count': 0, 'node_hours': 0.0})
+      for job in jobs:
+         queue_stats[job.queue]['count'] += 1
+         queue_stats[job.queue]['node_hours'] += self._calculate_node_hours(job)
+      
+      # Group by state
+      state_stats = defaultdict(lambda: {'count': 0, 'node_hours': 0.0})
+      for job in jobs:
+         state_stats[job.state.value]['count'] += 1
+         state_stats[job.state.value]['node_hours'] += self._calculate_node_hours(job)
+      
+      # Print overall summary
+      print(f"Total Jobs: {total_jobs}")
+      print(f"Total Node-Hours Requested: {total_node_hours:.1f}")
+      
+      # Print jobs per queue
+      print(f"\nJobs by Queue:")
+      for queue, stats in sorted(queue_stats.items()):
+         print(f"  {queue}: {stats['count']} jobs ({stats['node_hours']:.1f} node-hours)")
+      
+      # Print jobs per state  
+      print(f"\nJobs by State:")
+      for state, stats in sorted(state_stats.items()):
+         print(f"  {state}: {stats['count']} jobs ({stats['node_hours']:.1f} node-hours)")
 
    def _show_job_details(self, args: argparse.Namespace) -> int:
       """Show detailed information for specific jobs"""
@@ -506,7 +587,8 @@ class JobsCommand(BaseCommand):
          'score': lambda j: j.format_score(),
          'queue_time': lambda j: format_duration(j.queue_time_seconds) if j.queue_time_seconds else "N/A",
          'exit_status': lambda j: str(j.exit_status) if j.exit_status is not None else "N/A",
-         'execution_node': lambda j: j.execution_node or "N/A"
+         'execution_node': lambda j: j.execution_node or "N/A",
+         'node_hours': lambda j: f"{self._calculate_node_hours(j):.1f}"
       }
       
       # Build headers and rows
@@ -551,7 +633,8 @@ class JobsCommand(BaseCommand):
                "total_cores": job.total_cores or job.estimated_total_cores(),
                "walltime": job.walltime,
                "actual_walltime": self._get_actual_walltime(job),
-               "memory": job.memory
+               "memory": job.memory,
+               "node_hours_requested": self._calculate_node_hours(job)
             },
             "timing": {
                "submit_time": job.submit_time.isoformat() if job.submit_time else None,
@@ -607,6 +690,7 @@ class JobsCommand(BaseCommand):
       print(f"  Cores per Node: {format_number(job.ppn)}")
       print(f"  Total Cores: {format_number(job.total_cores or job.estimated_total_cores())}")
       print(f"  Walltime: {format_duration(job.walltime)}")
+      print(f"  Node-Hours Requested: {self._calculate_node_hours(job):.1f}")
       if job.memory:
          print(f"  Memory: {format_memory(job.memory)}")
       
@@ -1649,7 +1733,7 @@ class HistoryCommand(BaseCommand):
       """Display historical jobs in table format"""
       
       # Determine columns
-      default_columns = ['job_id', 'name', 'owner', 'project', 'allocation', 'state', 'queue', 'nodes', 'walltime', 'submit_time', 'queued', 'runtime', 'exit_status']
+      default_columns = ['job_id', 'name', 'owner', 'project', 'allocation', 'state', 'queue', 'nodes', 'walltime', 'node_hours', 'submit_time', 'queued', 'runtime', 'exit_status']
       columns = args.columns.split(',') if args.columns else default_columns
       
       # Create table data
@@ -1664,6 +1748,7 @@ class HistoryCommand(BaseCommand):
          'queue': lambda j: j.queue,
          'nodes': lambda j: format_number(j.nodes),
          'walltime': lambda j: format_duration(j.walltime),
+         'node_hours': lambda j: f"{self._calculate_node_hours(j):.1f}",
          'submit_time': lambda j: format_timestamp(j.submit_time),
          'start_time': lambda j: format_timestamp(j.start_time),
          'end_time': lambda j: format_timestamp(j.end_time),

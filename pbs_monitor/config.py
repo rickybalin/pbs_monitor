@@ -59,7 +59,7 @@ class DisplayConfig:
    
    # Default columns to show
    default_job_columns: List[str] = field(default_factory=lambda: [
-      "job_id", "state", "queue", "owner", "project", "allocation", "nodes", "walltime", "score", "queue_time"
+      "job_id", "state", "queue", "owner", "project", "allocation", "nodes", "walltime", "node_hours", "score", "queue_time"
    ])
    
    default_node_columns: List[str] = field(default_factory=lambda: [
@@ -252,7 +252,7 @@ class Config:
             'use_colors': True,
             'time_format': '%d-%m %H:%M',
             'default_job_columns': [
-               'job_id', 'state', 'queue', 'owner', 'project', 'allocation', 'nodes', 'walltime', 'score', 'queue_time'
+               'job_id', 'state', 'queue', 'owner', 'project', 'allocation', 'nodes', 'walltime', 'node_hours', 'score', 'queue_time'
             ],
             'default_node_columns': [
                'name', 'state', 'ncpus', 'memory', 'jobs', 'load'
