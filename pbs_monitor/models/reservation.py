@@ -14,11 +14,14 @@ class ReservationState(Enum):
     """PBS reservation states"""
     CONFIRMED = "RESV_CONFIRMED"      # Scheduled but not started
     RUNNING = "RESV_RUNNING"          # Currently active (RN in summary)
-    FINISHED = "RESV_FINISHED"        # Completed
-    DELETED = "RESV_DELETED"          # Cancelled
+    FINISHED = "RESV_FINISHED"        # Completed normally
+    DELETED = "RESV_DELETED"          # Cancelled/deleted
     DEGRADED = "RESV_DEGRADED"        # Some nodes unavailable
     CONFIRMED_SHORT = "CO"            # Confirmed state in summary output
     RUNNING_SHORT = "RN"              # Running state in summary output
+    COMPLETED = "COMPLETED"           # Inferred completion (past end time)
+    CANCELLED = "CANCELLED"           # Inferred cancellation (disappeared before end time)
+    EXPIRED = "EXPIRED"               # Time-based expiration
     UNKNOWN = "unknown"
 
     @classmethod

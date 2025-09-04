@@ -84,12 +84,19 @@ class ReservationState(enum.Enum):
     DEGRADED = "RESV_DEGRADED"
     CONFIRMED_SHORT = "CO"
     RUNNING_SHORT = "RN"
+    COMPLETED = "COMPLETED"           # Inferred completion (past end time)
+    CANCELLED = "CANCELLED"           # Inferred cancellation (disappeared before end time)
+    EXPIRED = "EXPIRED"               # Time-based expiration
     UNKNOWN = "unknown"
     
     @classmethod
     def from_pbs_state(cls, pbs_state: PBSReservationState) -> 'ReservationState':
         """Convert from existing PBSReservationState enum"""
-        return cls(pbs_state.value)
+        try:
+            return cls(pbs_state.value)
+        except ValueError:
+            # Handle cases where PBS state doesn't directly map to DB state
+            return cls.UNKNOWN
 
 class DataCollectionStatus(enum.Enum):
     SUCCESS = "success"

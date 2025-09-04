@@ -102,6 +102,10 @@ class DatabaseConfig:
    # Orphaned job detection settings
    orphaned_job_detection: bool = True     # Enable detection of orphaned jobs
    orphaned_job_threshold_minutes: int = 60  # Minutes before marking job as orphaned
+   
+   # Missing reservation detection settings
+   missing_reservation_detection: bool = True  # Enable detection of missing reservations
+   missing_reservation_threshold_minutes: int = 30  # Minutes before marking reservation as missing
 
 
 @dataclass
@@ -283,7 +287,9 @@ class Config:
             'auto_persist_interval': 300,
             'batch_size': 1000,
             'orphaned_job_detection': True,
-            'orphaned_job_threshold_minutes': 60
+            'orphaned_job_threshold_minutes': 60,
+            'missing_reservation_detection': True,
+            'missing_reservation_threshold_minutes': 30
          }
       }
       

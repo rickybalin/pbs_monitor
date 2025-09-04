@@ -841,6 +841,65 @@ class ReservationRepository(BaseRepository):
             ).limit(limit).all()
             session.expunge_all()
             return reservations
+    
+    def get_potentially_missing_reservations(self, threshold_minutes: int = 30) -> List[Reservation]:
+        """
+        Get reservations that might be missing from PBS output
+        
+        Returns reservations that:
+        1. Are in active states (CONFIRMED, RUNNING, etc.)
+        2. Haven't been updated recently (threshold_minutes)
+        3. Don't have final_state_recorded=True
+        
+        Args:
+            threshold_minutes: Minutes since last update to consider potentially missing
+            
+        Returns:
+            List of potentially missing reservations
+        """
+        threshold_time = datetime.now() - timedelta(minutes=threshold_minutes)
+        
+        with self.get_session() as session:
+            reservations = session.query(Reservation).filter(
+                # Active states only
+                Reservation.state.in_([
+                    ReservationState.CONFIRMED, ReservationState.RUNNING,
+                    ReservationState.CONFIRMED_SHORT, ReservationState.RUNNING_SHORT,
+                    ReservationState.DEGRADED
+                ]),
+                # Not updated recently
+                Reservation.last_updated < threshold_time,
+                # Final state not yet recorded
+                Reservation.final_state_recorded == False
+            ).all()
+            
+            session.expunge_all()
+            return reservations
+    
+    def mark_reservation_final_state(self, reservation_id: str, final_state: ReservationState) -> bool:
+        """
+        Mark a reservation as having reached its final state
+        
+        Args:
+            reservation_id: The reservation ID
+            final_state: The final state to set
+            
+        Returns:
+            True if reservation was found and updated
+        """
+        with self.get_session() as session:
+            reservation = session.query(Reservation).filter(
+                Reservation.reservation_id == reservation_id
+            ).first()
+            
+            if reservation:
+                reservation.state = final_state
+                reservation.final_state_recorded = True
+                reservation.last_updated = datetime.now()
+                session.commit()
+                return True
+            
+            return False
 
 
 class ReservationStateInfo:

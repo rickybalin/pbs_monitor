@@ -818,6 +818,9 @@ class AnalyzeCommand(BaseCommand):
                return 0
             utilizations = filtered_utilizations
          
+         # Enhance utilization data with current reservation states
+         utilizations = self._enhance_utilizations_with_current_state(utilizations)
+         
          # Get summary statistics
          summary = analyzer.get_utilization_summary(start_date, end_date)
          
@@ -935,9 +938,11 @@ class AnalyzeCommand(BaseCommand):
       
       for util in utilizations:
          # Format reservation ID with state indicator
+         # Use current_state if available (from database), otherwise fall back to stored state
+         current_state = util.get('current_state', util.get('state', 'unknown'))
          res_id = self._format_reservation_id_with_state(
             util['reservation_id'], 
-            util.get('state', 'unknown'), 
+            current_state, 
             util.get('start_time'),
             util.get('end_time')
          )
@@ -965,6 +970,43 @@ class AnalyzeCommand(BaseCommand):
       
       self.console.print(table)
    
+   def _enhance_utilizations_with_current_state(self, utilizations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+      """Enhance utilization data with current reservation states from database"""
+      try:
+         from ..database.repositories import RepositoryFactory
+         repo_factory = RepositoryFactory()
+         
+         with repo_factory.get_reservation_repository().get_session() as session:
+            # Get current states for all reservations
+            reservation_ids = [util['reservation_id'] for util in utilizations]
+            
+            # Query current states
+            from ..database.models import Reservation
+            reservations = session.query(Reservation).filter(
+               Reservation.reservation_id.in_(reservation_ids)
+            ).all()
+            
+            # Create mapping of reservation_id -> current_state
+            current_states = {
+               resv.reservation_id: resv.state for resv in reservations
+            }
+            
+            # Update utilization data with current states
+            enhanced_utilizations = []
+            for util in utilizations:
+               enhanced_util = util.copy()
+               current_state = current_states.get(util['reservation_id'])
+               if current_state:
+                  enhanced_util['current_state'] = current_state
+               enhanced_utilizations.append(enhanced_util)
+            
+            return enhanced_utilizations
+            
+      except Exception as e:
+         self.logger.warning(f"Failed to enhance utilizations with current state: {e}")
+         # Return original data if enhancement fails
+         return utilizations
+   
    def _format_reservation_id_with_state(self, reservation_id: str, state: str, start_time, end_time) -> str:
       """Format reservation ID with state indicator"""
       # Remove hostname part if present (everything after the first dot)
@@ -973,7 +1015,32 @@ class AnalyzeCommand(BaseCommand):
       else:
          short_id = reservation_id
       
-      # Determine state indicator
+      # Determine state indicator based on database state if available, 
+      # otherwise fall back to timing logic
+      from ..database.models import ReservationState
+      
+      # Use actual database state if provided
+      if hasattr(state, 'value'):  # It's an enum
+         db_state = state
+      else:
+         # Try to convert string to enum
+         try:
+            db_state = ReservationState(state)
+         except (ValueError, AttributeError):
+            db_state = None
+      
+      # Map database states to display indicators
+      # Only show state indicators for active reservations (Running/Future)
+      if db_state:
+         if db_state in [ReservationState.RUNNING, ReservationState.RUNNING_SHORT]:
+            return f"{short_id} [R]"
+         elif db_state in [ReservationState.CONFIRMED, ReservationState.CONFIRMED_SHORT]:
+            return f"{short_id} [F]"
+         else:
+            # No state indicator for completed/cancelled/expired reservations
+            return short_id
+      
+      # Fallback to timing logic for backward compatibility
       now = datetime.now()
       
       # Check if currently running (start_time <= now < end_time)

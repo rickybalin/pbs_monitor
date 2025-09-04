@@ -615,19 +615,55 @@ class DataCollector:
       return history_entries
    
    def _cleanup_reservation_state_cache(self, current_reservation_ids: Set[str]) -> None:
-      """Remove cache entries for reservations that no longer exist"""
+      """Remove cache entries for reservations that no longer exist or have reached final state"""
       if not self._database_enabled:
          return
       
       with self._update_lock:
-         # Remove entries for reservations that no longer exist
-         keys_to_remove = [resv_id for resv_id in self._reservation_state_cache.keys() 
-                          if resv_id not in current_reservation_ids]
-         for resv_id in keys_to_remove:
-            del self._reservation_state_cache[resv_id]
-         
-         if keys_to_remove:
-            self.logger.debug(f"Cleaned up {len(keys_to_remove)} reservation state cache entries")
+         # Get reservations that have reached final state from database
+         try:
+            reservation_repo = self._repository_factory.get_reservation_repository()
+            # We'll check each cached reservation to see if it's been marked as final
+            keys_to_remove = []
+            
+            for resv_id in list(self._reservation_state_cache.keys()):
+               # Remove if no longer in current PBS output
+               if resv_id not in current_reservation_ids:
+                  # Before removing, check if this reservation exists in DB with final state
+                  try:
+                     db_reservation = reservation_repo.get_reservation_by_id(resv_id)
+                     if db_reservation and db_reservation.final_state_recorded:
+                        # This reservation has been finalized, safe to remove from cache
+                        keys_to_remove.append(resv_id)
+                        self.logger.debug(f"Removing finalized reservation {resv_id} from cache")
+                     elif db_reservation:
+                        # Still in DB but not finalized - keep in cache for missing detection
+                        self.logger.debug(f"Keeping reservation {resv_id} in cache (not finalized)")
+                     else:
+                        # Not in DB at all - safe to remove
+                        keys_to_remove.append(resv_id)
+                  except Exception as e:
+                     self.logger.warning(f"Error checking final state for {resv_id}: {e}")
+                     # If we can't check, remove to avoid cache bloat
+                     keys_to_remove.append(resv_id)
+            
+            # Remove the identified keys
+            for resv_id in keys_to_remove:
+               del self._reservation_state_cache[resv_id]
+            
+            if keys_to_remove:
+               self.logger.debug(f"Cleaned up {len(keys_to_remove)} reservation state cache entries")
+               
+         except Exception as e:
+            self.logger.warning(f"Failed to check final states during cache cleanup: {e}")
+            # Fallback to simple cleanup
+            keys_to_remove = [resv_id for resv_id in self._reservation_state_cache.keys() 
+                             if resv_id not in current_reservation_ids]
+            for resv_id in keys_to_remove:
+               del self._reservation_state_cache[resv_id]
+            
+            if keys_to_remove:
+               self.logger.debug(f"Cleaned up {len(keys_to_remove)} reservation state cache entries (fallback)")
    
    def _detect_and_handle_orphaned_jobs(self, current_pbs_job_ids: Set[str]) -> None:
       """
@@ -681,6 +717,125 @@ class DataCollector:
             
       except Exception as e:
          self.logger.error(f"Failed to detect orphaned jobs: {str(e)}")
+   
+   def _detect_and_handle_missing_reservations(self, current_pbs_reservation_ids: Set[str]) -> None:
+      """
+      Detect reservations that are active in database but missing from PBS and infer final state
+      
+      Args:
+         current_pbs_reservation_ids: Set of reservation IDs currently visible in PBS
+      """
+      if not self._database_enabled:
+         return
+      
+      # Check if missing reservation detection is enabled (default: True)
+      missing_detection_enabled = getattr(self.config.database, 'missing_reservation_detection', True)
+      if not missing_detection_enabled:
+         self.logger.debug("Missing reservation detection is disabled")
+         return
+      
+      # Get missing reservation threshold (default: 30 minutes)
+      threshold_minutes = getattr(self.config.database, 'missing_reservation_threshold_minutes', 30)
+      
+      try:
+         reservation_repo = self._repository_factory.get_reservation_repository()
+         
+         # Get potentially missing reservations from database
+         potentially_missing = reservation_repo.get_potentially_missing_reservations(threshold_minutes)
+         
+         # Filter to only those truly missing from current PBS output
+         missing_reservations = [
+            resv for resv in potentially_missing 
+            if resv.reservation_id not in current_pbs_reservation_ids
+         ]
+         
+         if not missing_reservations:
+            self.logger.debug("No missing reservations detected")
+            return
+         
+         self.logger.info(f"Detected {len(missing_reservations)} missing reservations")
+         
+         # Process each missing reservation
+         for reservation in missing_reservations:
+            try:
+               final_state = self._infer_reservation_final_state(reservation)
+               
+               # Update reservation in database
+               if reservation_repo.mark_reservation_final_state(reservation.reservation_id, final_state):
+                  self.logger.info(f"Marked reservation {reservation.reservation_id} as {final_state.value}")
+                  
+                  # Create history entry for the final state transition
+                  from .database.model_converters import ModelConverters
+                  if not hasattr(self, '_model_converters') or self._model_converters is None:
+                     self._model_converters = ModelConverters()
+                  
+                  # Create a PBSReservation object for history
+                  from .models.reservation import PBSReservation
+                  pbs_reservation = PBSReservation(
+                     reservation_id=reservation.reservation_id,
+                     reservation_name=reservation.reservation_name,
+                     owner=reservation.owner,
+                     state=final_state,
+                     start_time=reservation.start_time,
+                     end_time=reservation.end_time,
+                     duration_seconds=reservation.duration_seconds,
+                     queue=reservation.queue,
+                     nodes=reservation.nodes,
+                     ncpus=reservation.ncpus,
+                     ngpus=reservation.ngpus,
+                     walltime=reservation.walltime
+                  )
+                  
+                  history_entry = self._model_converters.reservation.to_reservation_history(pbs_reservation)
+                  reservation_repo.add_reservation_history_batch([history_entry])
+                  
+               else:
+                  self.logger.warning(f"Failed to update missing reservation {reservation.reservation_id}")
+                  
+            except Exception as e:
+               self.logger.error(f"Failed to handle missing reservation {reservation.reservation_id}: {str(e)}")
+               
+      except Exception as e:
+         self.logger.error(f"Failed to detect missing reservations: {str(e)}")
+   
+   def _infer_reservation_final_state(self, reservation: 'Reservation') -> 'ReservationState':
+      """
+      Infer the final state of a missing reservation based on timing and context
+      
+      Args:
+         reservation: Database reservation object
+         
+      Returns:
+         Inferred final ReservationState
+      """
+      from .database.models import ReservationState
+      
+      now = datetime.now()
+      
+      # If reservation has an end time
+      if reservation.end_time:
+         if now >= reservation.end_time:
+            # Past the scheduled end time - likely completed normally
+            return ReservationState.COMPLETED
+         else:
+            # Disappeared before end time - likely cancelled
+            return ReservationState.CANCELLED
+      
+      # If no end time but has start time and duration
+      elif reservation.start_time and reservation.duration_seconds:
+         calculated_end = reservation.start_time + timedelta(seconds=reservation.duration_seconds)
+         if now >= calculated_end:
+            return ReservationState.COMPLETED
+         else:
+            return ReservationState.CANCELLED
+      
+      # For reservations without clear timing info, check if they ever started
+      elif reservation.start_time and now > reservation.start_time:
+         # Started but no clear end time - assume completed if missing for a while
+         return ReservationState.COMPLETED
+      else:
+         # Never started and now missing - likely cancelled
+         return ReservationState.CANCELLED
    
    def _check_for_orphaned_job_recovery(self, current_pbs_jobs: List[PBSJob]) -> None:
       """
@@ -801,6 +956,9 @@ class DataCollector:
          
          # Check for recovery of previously orphaned jobs
          self._check_for_orphaned_job_recovery(all_jobs_for_db)
+         
+         # Detect and handle missing reservations (active in DB but missing from PBS)
+         self._detect_and_handle_missing_reservations(current_reservation_ids)
          
          # Add collection log ID to remaining entries (job_history already has it)
          for entry in db_data['queue_snapshots']:
