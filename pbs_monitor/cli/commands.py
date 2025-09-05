@@ -163,6 +163,68 @@ class BaseCommand(ABC):
                f"{result['queues_collected']} queues, {result['nodes_collected']} nodes")
       except Exception as e:
          print(f"Warning: Database collection failed: {str(e)}")
+   
+   def _parse_walltime_to_hours(self, walltime: str) -> float:
+      """
+      Parse walltime string to hours
+      
+      Args:
+         walltime: Walltime string in format HH:MM:SS or DD:HH:MM:SS
+         
+      Returns:
+         Walltime in hours as float
+      """
+      if not walltime:
+         return 0.0
+      
+      try:
+         parts = walltime.split(':')
+         if len(parts) == 3:
+            # HH:MM:SS format
+            hours, minutes, seconds = map(int, parts)
+            return hours + minutes / 60.0 + seconds / 3600.0
+         elif len(parts) == 4:
+            # DD:HH:MM:SS format
+            days, hours, minutes, seconds = map(int, parts)
+            return days * 24 + hours + minutes / 60.0 + seconds / 3600.0
+         else:
+            return 0.0
+      except (ValueError, TypeError):
+         return 0.0
+
+   def _calculate_node_hours(self, job: PBSJob) -> float:
+      """Calculate requested node-hours for a job"""
+      if not job.nodes or not job.walltime:
+         return 0.0
+      
+      walltime_hours = self._parse_walltime_to_hours(job.walltime)
+      return job.nodes * walltime_hours
+   
+   def _calculate_current_queue_seconds(self, job: PBSJob) -> int:
+      """Calculate current queue time in seconds for sorting"""
+      from datetime import datetime
+      
+      if not job.submit_time:
+         return -1
+      
+      # For completed/running jobs, use queue_time_seconds if available
+      if job.queue_time_seconds is not None:
+         return job.queue_time_seconds
+      
+      # For jobs still in queue, calculate against current time
+      if job.state.value in ['Q', 'H', 'W']:  # Queued, Held, or Waiting states
+         now = datetime.now(job.submit_time.tzinfo)  # Use same timezone as submit_time
+         queue_duration = now - job.submit_time
+         return int(queue_duration.total_seconds())
+      
+      return -1
+
+   def _format_queue_time(self, job: PBSJob) -> str:
+      """Format queue time, using current time for jobs still in queue"""
+      seconds = self._calculate_current_queue_seconds(job)
+      if seconds >= 0:
+         return format_duration(seconds)
+      return "N/A"
 
 
 class StatusCommand(BaseCommand):
@@ -391,68 +453,6 @@ class JobsCommand(BaseCommand):
       
       return 0
    
-   def _calculate_current_queue_seconds(self, job: PBSJob) -> int:
-      """Calculate current queue time in seconds for sorting"""
-      from datetime import datetime
-      
-      if not job.submit_time:
-         return -1
-      
-      # For completed/running jobs, use queue_time_seconds if available
-      if job.queue_time_seconds is not None:
-         return job.queue_time_seconds
-      
-      # For jobs still in queue, calculate against current time
-      if job.state.value in ['Q', 'H', 'W']:  # Queued, Held, or Waiting states
-         now = datetime.now(job.submit_time.tzinfo)  # Use same timezone as submit_time
-         queue_duration = now - job.submit_time
-         return int(queue_duration.total_seconds())
-      
-      return -1
-
-   def _format_queue_time(self, job: PBSJob) -> str:
-      """Format queue time, using current time for jobs still in queue"""
-      seconds = self._calculate_current_queue_seconds(job)
-      if seconds >= 0:
-         return format_duration(seconds)
-      return "N/A"
-
-   def _parse_walltime_to_hours(self, walltime: str) -> float:
-      """
-      Parse walltime string to hours
-      
-      Args:
-         walltime: Walltime string in format HH:MM:SS or DD:HH:MM:SS
-         
-      Returns:
-         Walltime in hours as float
-      """
-      if not walltime:
-         return 0.0
-      
-      try:
-         parts = walltime.split(':')
-         if len(parts) == 3:
-            # HH:MM:SS format
-            hours, minutes, seconds = map(int, parts)
-            return hours + minutes / 60.0 + seconds / 3600.0
-         elif len(parts) == 4:
-            # DD:HH:MM:SS format
-            days, hours, minutes, seconds = map(int, parts)
-            return days * 24 + hours + minutes / 60.0 + seconds / 3600.0
-         else:
-            return 0.0
-      except (ValueError, TypeError):
-         return 0.0
-
-   def _calculate_node_hours(self, job: PBSJob) -> float:
-      """Calculate requested node-hours for a job"""
-      if not job.nodes or not job.walltime:
-         return 0.0
-      
-      walltime_hours = self._parse_walltime_to_hours(job.walltime)
-      return job.nodes * walltime_hours
-
    def _print_job_summary_statistics(self, jobs: List[PBSJob]) -> None:
       """Print summary statistics for jobs"""
       from collections import defaultdict
