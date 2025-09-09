@@ -373,7 +373,7 @@ class UsageInsights:
             color_order = [queue_palette.get(str(c)) for c in pivot.columns]
             pivot.plot.area(ax=ax, color=color_order)
             ax.set_title(f'Throughput over time (used node-hours started per {ts_freq})')
-            ax.set_xlabel('Time')
+            ax.set_xlabel('')  # Remove x-axis title
             ax.set_ylabel('Used node-hours started')
             ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Queue', frameon=False)
             if save_dir:
@@ -396,7 +396,7 @@ class UsageInsights:
             color_order = [alloc_palette.get(str(c)) for c in pivot.columns]
             pivot.plot.area(ax=ax, color=color_order)
             ax.set_title(f'Throughput over time by allocation type (used node-hours started per {ts_freq})')
-            ax.set_xlabel('Time')
+            ax.set_xlabel('')  # Remove x-axis title
             ax.set_ylabel('Used node-hours started')
             ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Allocation Type', frameon=False)
             if save_dir:
@@ -417,8 +417,15 @@ class UsageInsights:
             color_order = [queue_palette.get(str(c)) for c in pivot.columns]
             pivot.plot.area(ax=ax, color=color_order)
             ax.set_title(f'Queue depth over time (machine-hours queued per {ts_freq})')
-            ax.set_xlabel('Time')
+            ax.set_xlabel('')  # Remove x-axis title
             ax.set_ylabel('Machine-hours queued')
+            # Format x-axis dates - be more explicit to override pandas defaults
+            import matplotlib.dates as mdates
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+            ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(pivot.index) // 10)))
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+            # Force the formatter to be applied
+            fig.autofmt_xdate(rotation=45)
             ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Queue', frameon=False)
             if save_dir:
                pth = os.path.join(save_dir, f'queue_depth_machine_hours_per_{ts_freq}.png')
@@ -441,8 +448,15 @@ class UsageInsights:
             color_order = [alloc_palette.get(str(c)) for c in pivot.columns]
             pivot.plot.area(ax=ax, color=color_order)
             ax.set_title(f'Queue depth over time by allocation type (machine-hours queued per {ts_freq})')
-            ax.set_xlabel('Time')
+            ax.set_xlabel('')  # Remove x-axis title
             ax.set_ylabel('Machine-hours queued')
+            # Format x-axis dates - be more explicit to override pandas defaults
+            import matplotlib.dates as mdates
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+            ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(pivot.index) // 10)))
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+            # Force the formatter to be applied
+            fig.autofmt_xdate(rotation=45)
             ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Allocation Type', frameon=False)
             if save_dir:
                pth = os.path.join(save_dir, f'queue_depth_machine_hours_by_allocation_per_{ts_freq}.png')
@@ -542,9 +556,16 @@ class UsageInsights:
                fig, ax = plt.subplots(figsize=(14, 6))
                ax.plot(utilization_pct.index, utilization_pct.values, label='Utilization')
                ax.set_title(f'Utilization over time (% of capacity used per {ts_freq})')
-               ax.set_xlabel('Time')
+               ax.set_xlabel('')  # Remove x-axis title
                ax.set_ylabel('Utilization (%)')
                ax.set_ylim(0, 100)
+               # Format x-axis dates and rotate labels
+               import matplotlib.dates as mdates
+               ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+               ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(utilization_pct.index) // 10)))
+               plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+               # Force the formatter to be applied
+               fig.autofmt_xdate(rotation=45)
                if save_dir:
                   pth = os.path.join(save_dir, f'utilization_percent_per_{ts_freq}.png')
                   fig.savefig(pth, bbox_inches='tight', dpi=dpi)
