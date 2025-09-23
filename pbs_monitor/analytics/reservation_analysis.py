@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional, Tuple
 import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func, desc, or_
+from sqlalchemy.exc import OperationalError
 
 from ..database.models import (
     Reservation, ReservationUtilization, Job, JobState, 
@@ -24,6 +25,7 @@ class ReservationUtilizationAnalyzer:
     def __init__(self, repository_factory: Optional[RepositoryFactory] = None):
         self.repo_factory = repository_factory or RepositoryFactory()
         self.logger = logging.getLogger(__name__)
+        self._readonly_mode = False
     
     def analyze_reservation_utilization(self, 
                                        reservation_id: str,
@@ -85,14 +87,27 @@ class ReservationUtilizationAnalyzer:
                     **metrics
                 }
                 
-                # Store in database
-                utilization = ReservationUtilization(
-                    reservation_id=reservation_id,
-                    analysis_timestamp=datetime.now(),
-                    **metrics
-                )
-                session.add(utilization)
-                session.commit()
+                # Try to store in database (if not read-only)
+                if not self._readonly_mode:
+                    try:
+                        utilization = ReservationUtilization(
+                            reservation_id=reservation_id,
+                            analysis_timestamp=datetime.now(),
+                            **metrics
+                        )
+                        session.add(utilization)
+                        session.commit()
+                        self.logger.debug(f"Stored utilization analysis for reservation {reservation_id}")
+                    except OperationalError as e:
+                        if "readonly database" in str(e).lower():
+                            self._readonly_mode = True
+                            self.logger.warning("Database is read-only - analysis results will not be persisted. "
+                                              "Continuing in read-only mode for future operations.")
+                            session.rollback()
+                        else:
+                            raise
+                else:
+                    self.logger.debug(f"Read-only mode: skipping database storage for reservation {reservation_id}")
                 
                 return result
                 
