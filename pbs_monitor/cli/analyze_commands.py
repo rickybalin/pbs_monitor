@@ -821,8 +821,11 @@ class AnalyzeCommand(BaseCommand):
          # Enhance utilization data with current reservation states
          utilizations = self._enhance_utilizations_with_current_state(utilizations)
          
-         # Get summary statistics
-         summary = analyzer.get_utilization_summary(start_date, end_date)
+         # Get summary statistics (in read-only mode, calculate from current results)
+         if analyzer._readonly_mode and utilizations:
+            summary = analyzer._calculate_summary_from_results(utilizations)
+         else:
+            summary = analyzer.get_utilization_summary(start_date, end_date)
          
          # Display results
          self._display_reservation_utilization_results(utilizations, summary, args)

@@ -217,6 +217,42 @@ class ReservationUtilizationAnalyzer:
         
         return summary
     
+    def _calculate_summary_from_results(self, utilizations: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Calculate summary statistics from current analysis results (for read-only mode)
+        
+        Args:
+            utilizations: List of utilization result dictionaries
+            
+        Returns:
+            Dictionary with summary statistics
+        """
+        if not utilizations:
+            return {
+                'total_reservations': 0,
+                'avg_utilization': 0.0,
+                'median_utilization': 0.0,
+                'min_utilization': 0.0,
+                'max_utilization': 0.0,
+                'underutilized_count': 0,
+                'well_utilized_count': 0
+            }
+        
+        # Extract utilization percentages
+        utilization_percentages = [u.get('utilization_percentage', 0) for u in utilizations]
+        
+        summary = {
+            'total_reservations': len(utilizations),
+            'avg_utilization': sum(utilization_percentages) / len(utilization_percentages),
+            'median_utilization': sorted(utilization_percentages)[len(utilization_percentages) // 2],
+            'min_utilization': min(utilization_percentages),
+            'max_utilization': max(utilization_percentages),
+            'underutilized_count': len([u for u in utilization_percentages if u < 50.0]),
+            'well_utilized_count': len([u for u in utilization_percentages if u >= 80.0])
+        }
+        
+        return summary
+    
     def _get_reservation(self, session: Session, reservation_id: str) -> Optional[Reservation]:
         """Get reservation from database"""
         return session.query(Reservation).filter(
