@@ -8,6 +8,7 @@ This directory contains the documentation for PBS Monitor.
 - CLI Reference: `user/cli_reference.md` (auto-generated; see generator script)
 - Configuration Guide: `user/configuration.md`
 - Database Guide: `user/database.md`
+- Database Relocation: `user/database_relocation.md`
 - Daemon and Deployment: `user/daemon_and_deployment.md`
 - Historical Job Analysis: `user/history.md`
 - Performance and Maintenance: `user/performance_and_maintenance.md`
