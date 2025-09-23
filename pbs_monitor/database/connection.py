@@ -50,13 +50,13 @@ class DatabaseManager:
         database_url = self._get_database_url()
         engine_options = self._get_engine_options()
         
-        logger.info(f"Initializing database connection to: {self._mask_url(database_url)}")
+        logger.debug(f"Initializing database connection to: {self._mask_url(database_url)}")
         
         self.engine = create_engine(database_url, **engine_options)
         self.session_factory = sessionmaker(bind=self.engine)
         self._initialized = True
         
-        logger.info("Database connection initialized successfully")
+        logger.debug("Database connection initialized successfully")
     
     def _get_database_url(self) -> str:
         """Get database URL from configuration, preferring explicit config over env vars."""
