@@ -69,6 +69,21 @@ class UsageInsights:
       self.data_collector = data_collector
       self.logger = logging.getLogger(__name__)
 
+   # --------- Frequency normalization helper ---------
+   def _normalize_freq(self, freq: str) -> str:
+      """
+      Normalize frequency strings to avoid pandas FutureWarnings.
+      Convert deprecated uppercase frequencies to lowercase.
+      """
+      freq_map = {
+         'H': 'h',   # Hourly
+         'D': 'D',   # Daily (already correct)
+         'W': 'W',   # Weekly (already correct)
+         'M': 'M',   # Monthly (already correct)
+         'Y': 'Y',   # Yearly (already correct)
+      }
+      return freq_map.get(freq, freq)
+
    # --------- Public API ---------
    def build_job_metrics(
       self,
@@ -224,7 +239,7 @@ class UsageInsights:
       # 3) Start-score distribution by queue (violin + box)
       try:
          fig, ax = plt.subplots(figsize=(10, 6))
-         sns.violinplot(data=df, x='queue', y='start_score', inner=None, ax=ax, cut=0, palette=queue_palette)
+         sns.violinplot(data=df, x='queue', y='start_score', hue='queue', inner=None, ax=ax, cut=0, palette=queue_palette, legend=False)
          sns.boxplot(data=df, x='queue', y='start_score', ax=ax, width=0.25, showcaps=True, boxprops={'facecolor':'none'})
          ax.set_title('Start-score distribution by queue')
          ax.set_xlabel('Queue')
@@ -450,13 +465,16 @@ class UsageInsights:
             ax.set_title(f'Queue depth over time by allocation type (machine-hours queued per {ts_freq})')
             ax.set_xlabel('')  # Remove x-axis title
             ax.set_ylabel('Machine-hours queued')
+            # Clear any existing formatters and ticks to prevent lingering labels
+            ax.xaxis.set_major_formatter(plt.NullFormatter())
+            ax.xaxis.set_minor_formatter(plt.NullFormatter())
+            ax.xaxis.set_major_locator(plt.NullLocator())
+            ax.xaxis.set_minor_locator(plt.NullLocator())
             # Format x-axis dates - be more explicit to override pandas defaults
             import matplotlib.dates as mdates
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
             ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(pivot.index) // 10)))
             plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
-            # Force the formatter to be applied
-            fig.autofmt_xdate(rotation=45)
             ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Allocation Type', frameon=False)
             if save_dir:
                pth = os.path.join(save_dir, f'queue_depth_machine_hours_by_allocation_per_{ts_freq}.png')
@@ -473,7 +491,7 @@ class UsageInsights:
          self.logger.debug(f"Wait bins result: {len(wait_bins)} rows")
          if not wait_bins.empty:
             # Aggregate across all queues to get total count per wait bin
-            total_by_bin = wait_bins.groupby('wait_bin')['count'].sum().reset_index()
+            total_by_bin = wait_bins.groupby('wait_bin', observed=True)['count'].sum().reset_index()
             
             # Ensure all bins are present (even with 0 count)
             all_bins = ['<1hr', '1-6hrs', '6-12hrs', '12-24hrs', 
@@ -534,13 +552,13 @@ class UsageInsights:
             if not used_df.empty:
                # Build full timeline to include zero-usage bins
                now_ts = pd.Timestamp.now(tz=None)
-               start_bin = window_start.to_period(ts_freq).to_timestamp()
-               end_bin = now_ts.to_period(ts_freq).to_timestamp()
-               full_idx = pd.date_range(start=start_bin, end=end_bin, freq=ts_freq)
+               start_bin = window_start.to_period(self._normalize_freq(ts_freq)).to_timestamp()
+               end_bin = now_ts.to_period(self._normalize_freq(ts_freq)).to_timestamp()
+               full_idx = pd.date_range(start=start_bin, end=end_bin, freq=self._normalize_freq(ts_freq))
                used_series = used_df.set_index('timestamp')['used_node_hours'].reindex(full_idx, fill_value=0.0)
 
                # Compute capacity hours per bin
-               offset = pd.tseries.frequencies.to_offset(ts_freq)
+               offset = pd.tseries.frequencies.to_offset(self._normalize_freq(ts_freq))
                cap_hours = []
                for t in used_series.index:
                   candidate_next = t + offset
@@ -895,7 +913,8 @@ class UsageInsights:
       dfx = dfx[dfx['start_time'] >= window_start]
       if dfx.empty:
          return pd.DataFrame(columns=['timestamp', 'queue', 'node_hours'])
-      dfx['timestamp'] = dfx['start_time'].dt.to_period(freq).dt.to_timestamp()
+      norm_freq = self._normalize_freq(freq)
+      dfx['timestamp'] = dfx['start_time'].dt.to_period(norm_freq).dt.to_timestamp()
       out = (
          dfx.groupby(['timestamp', 'queue'])['requested_node_hours']
             .sum()
@@ -937,15 +956,15 @@ class UsageInsights:
       
       # Generate timeline bins for the analysis window
       now = pd.Timestamp.now(tz=None)
-      start_bin = window_start.to_period(freq).to_timestamp()
-      end_bin = now.to_period(freq).to_timestamp()
-      timeline = pd.date_range(start=start_bin, end=end_bin, freq=freq)
+      start_bin = window_start.to_period(self._normalize_freq(freq)).to_timestamp()
+      end_bin = now.to_period(self._normalize_freq(freq)).to_timestamp()
+      timeline = pd.date_range(start=start_bin, end=end_bin, freq=self._normalize_freq(freq))
       
       rows: List[Tuple[pd.Timestamp, str, float]] = []
       
       # For each time bin, calculate machine-hours
       for t in timeline:
-         next_t_candidates = pd.date_range(start=t, periods=2, freq=freq)
+         next_t_candidates = pd.date_range(start=t, periods=2, freq=self._normalize_freq(freq))
          next_t = next_t_candidates[-1] if len(next_t_candidates) == 2 else (t + pd.Timedelta(hours=24))
          
          # Group queued node-hours by queue for this time bin
@@ -1030,15 +1049,15 @@ class UsageInsights:
       
       # Generate timeline bins for the analysis window
       now = pd.Timestamp.now(tz=None)
-      start_bin = window_start.to_period(freq).to_timestamp()
-      end_bin = now.to_period(freq).to_timestamp()
-      timeline = pd.date_range(start=start_bin, end=end_bin, freq=freq)
+      start_bin = window_start.to_period(self._normalize_freq(freq)).to_timestamp()
+      end_bin = now.to_period(self._normalize_freq(freq)).to_timestamp()
+      timeline = pd.date_range(start=start_bin, end=end_bin, freq=self._normalize_freq(freq))
       
       rows: List[Tuple[pd.Timestamp, str, float]] = []
       
       # For each time bin, calculate machine-hours
       for t in timeline:
-         next_t_candidates = pd.date_range(start=t, periods=2, freq=freq)
+         next_t_candidates = pd.date_range(start=t, periods=2, freq=self._normalize_freq(freq))
          next_t = next_t_candidates[-1] if len(next_t_candidates) == 2 else (t + pd.Timedelta(hours=24))
          
          # Group queued node-hours by allocation type for this time bin
@@ -1111,11 +1130,11 @@ class UsageInsights:
                continue
             if en <= window_start:
                continue
-            start_bin = max(pd.Timestamp(st).to_period(freq).to_timestamp(), window_start)
-            end_bin = pd.Timestamp(en).to_period(freq).to_timestamp()
+            start_bin = max(pd.Timestamp(st).to_period(self._normalize_freq(freq)).to_timestamp(), window_start)
+            end_bin = pd.Timestamp(en).to_period(self._normalize_freq(freq)).to_timestamp()
             if end_bin < start_bin:
                end_bin = start_bin
-            timeline = pd.date_range(start=start_bin, end=end_bin, freq=freq)
+            timeline = pd.date_range(start=start_bin, end=end_bin, freq=self._normalize_freq(freq))
             if len(timeline) == 0:
                timeline = pd.DatetimeIndex([start_bin])
             for t in timeline:
@@ -1153,15 +1172,15 @@ class UsageInsights:
                continue
             if en <= window_start:
                continue
-            start_bin = max(pd.Timestamp(st).to_period(freq).to_timestamp(), window_start)
-            end_bin = pd.Timestamp(en).to_period(freq).to_timestamp()
+            start_bin = max(pd.Timestamp(st).to_period(self._normalize_freq(freq)).to_timestamp(), window_start)
+            end_bin = pd.Timestamp(en).to_period(self._normalize_freq(freq)).to_timestamp()
             if end_bin < start_bin:
                end_bin = start_bin
-            timeline = pd.date_range(start=start_bin, end=end_bin, freq=freq)
+            timeline = pd.date_range(start=start_bin, end=end_bin, freq=self._normalize_freq(freq))
             if len(timeline) == 0:
                timeline = pd.DatetimeIndex([start_bin])
             for t in timeline:
-               next_t_candidates = pd.date_range(start=t, periods=2, freq=freq)
+               next_t_candidates = pd.date_range(start=t, periods=2, freq=self._normalize_freq(freq))
                next_t = next_t_candidates[-1] if len(next_t_candidates) == 2 else (t + pd.Timedelta(hours=24))
                # overlap within [t, next_t)
                seg_start = max(pd.Timestamp(st), t)
@@ -1203,15 +1222,15 @@ class UsageInsights:
                continue
             if en <= window_start:
                continue
-            start_bin = max(pd.Timestamp(st).to_period(freq).to_timestamp(), window_start)
-            end_bin = pd.Timestamp(en).to_period(freq).to_timestamp()
+            start_bin = max(pd.Timestamp(st).to_period(self._normalize_freq(freq)).to_timestamp(), window_start)
+            end_bin = pd.Timestamp(en).to_period(self._normalize_freq(freq)).to_timestamp()
             if end_bin < start_bin:
                end_bin = start_bin
-            timeline = pd.date_range(start=start_bin, end=end_bin, freq=freq)
+            timeline = pd.date_range(start=start_bin, end=end_bin, freq=self._normalize_freq(freq))
             if len(timeline) == 0:
                timeline = pd.DatetimeIndex([start_bin])
             for t in timeline:
-               next_t_candidates = pd.date_range(start=t, periods=2, freq=freq)
+               next_t_candidates = pd.date_range(start=t, periods=2, freq=self._normalize_freq(freq))
                next_t = next_t_candidates[-1] if len(next_t_candidates) == 2 else (t + pd.Timedelta(hours=24))
                # overlap within [t, next_t)
                seg_start = max(pd.Timestamp(st), t)
@@ -1253,15 +1272,15 @@ class UsageInsights:
                continue
             if en <= window_start:
                continue
-            start_bin = max(pd.Timestamp(st).to_period(freq).to_timestamp(), window_start)
-            end_bin = pd.Timestamp(en).to_period(freq).to_timestamp()
+            start_bin = max(pd.Timestamp(st).to_period(self._normalize_freq(freq)).to_timestamp(), window_start)
+            end_bin = pd.Timestamp(en).to_period(self._normalize_freq(freq)).to_timestamp()
             if end_bin < start_bin:
                end_bin = start_bin
-            timeline = pd.date_range(start=start_bin, end=end_bin, freq=freq)
+            timeline = pd.date_range(start=start_bin, end=end_bin, freq=self._normalize_freq(freq))
             if len(timeline) == 0:
                timeline = pd.DatetimeIndex([start_bin])
             for t in timeline:
-               next_t_candidates = pd.date_range(start=t, periods=2, freq=freq)
+               next_t_candidates = pd.date_range(start=t, periods=2, freq=self._normalize_freq(freq))
                next_t = next_t_candidates[-1] if len(next_t_candidates) == 2 else (t + pd.Timedelta(hours=24))
                # overlap within [t, next_t)
                seg_start = max(pd.Timestamp(st), t)
@@ -1347,7 +1366,7 @@ class UsageInsights:
       
       # Group by queue and wait bin
       counts = (
-         queued.groupby(['queue', 'wait_bin'])
+         queued.groupby(['queue', 'wait_bin'], observed=True)
          .size()
          .reset_index(name='count')
          .sort_values(['queue', 'wait_bin'])
