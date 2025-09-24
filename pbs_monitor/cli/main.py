@@ -502,6 +502,12 @@ Examples:
       default="all",
       help="Filter reservations by status: running (currently active), future (not yet started), or all (default: all)"
    )
+   reservation_util_parser.add_argument(
+      "-d", "--days",
+      type=int,
+      default=7,
+      help="Number of days to look back from today for reservations (default: 7). Includes reservations starting in the last N days and future reservations"
+   )
    
    # Analyze reservation-trends
    reservation_trends_parser = analyze_subparsers.add_parser(

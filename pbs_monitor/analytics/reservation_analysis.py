@@ -59,9 +59,14 @@ class ReservationUtilizationAnalyzer:
                 window_end = end_date or reservation.end_time
 
                 # Cap to now when analyzing an ongoing reservation unless user provided explicit end_date
+                # Only apply this capping for reservations that are actually ongoing
                 now_ts = datetime.now()
                 if end_date is None and window_end and window_end > now_ts:
-                    window_end = now_ts
+                    # Only cap to now if the reservation is actually still running
+                    if reservation.state and reservation.state in [ReservationState.RUNNING, ReservationState.CONFIRMED]:
+                        window_end = now_ts
+                    # For completed reservations, use the actual end time even if it's in the future
+                    # (this can happen if reservation data collection captured future end times)
 
                 # Find jobs whose run interval overlaps the reservation window
                 reservation_jobs = self._find_reservation_jobs(
@@ -142,8 +147,10 @@ class ReservationUtilizationAnalyzer:
             
             for reservation in reservations:
                 try:
+                    # Analyze each reservation using its natural time window
+                    # The start_date/end_date parameters were used to filter which reservations to include
                     result = self.analyze_reservation_utilization(
-                        reservation.reservation_id, start_date, end_date
+                        reservation.reservation_id, None, None
                     )
                     results.append(result)
                 except Exception as e:
@@ -271,10 +278,15 @@ class ReservationUtilizationAnalyzer:
         if reservation_ids:
             query = query.filter(Reservation.reservation_id.in_(reservation_ids))
         
+        # Filter by start_time if start_date is provided
         if start_date:
             query = query.filter(Reservation.start_time >= start_date)
+            
+        # Filter by end_time only if end_date is provided
+        # This allows including future reservations when end_date is None
         if end_date:
             query = query.filter(Reservation.end_time <= end_date)
+            
         if states:
             query = query.filter(Reservation.state.in_(states))
         
@@ -375,7 +387,13 @@ class ReservationUtilizationAnalyzer:
         for job in jobs:
             if job.get('nodes') and job.get('start_time'):
                 # Calculate overlap between job run interval and effective reservation window
-                real_job_end = job.get('end_time') or datetime.now()
+                # For jobs without end_time, use the effective_end of the reservation window
+                # This makes calculations deterministic for completed reservations
+                real_job_end = job.get('end_time')
+                if real_job_end is None:
+                    # If no job end time and no effective end, use current time (for ongoing reservations)
+                    real_job_end = effective_end or datetime.now()
+                
                 overlap_start = max(job['start_time'], effective_start) if effective_start else job['start_time']
                 overlap_end = min(real_job_end, effective_end) if effective_end else real_job_end
 

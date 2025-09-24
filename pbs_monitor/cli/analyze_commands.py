@@ -36,7 +36,8 @@ class AnalyzeCommand(BaseCommand):
          print("  pbs-monitor analyze run-now                    # Get a run-now suggestion")
          print("  pbs-monitor analyze run-score                    # Analyze job scores")
          print("  pbs-monitor analyze walltime-efficiency-by-user  # Analyze user efficiency")
-         print("  pbs-monitor analyze reservation-utilization      # Analyze reservation usage")
+         print("  pbs-monitor analyze reservation-utilization      # Analyze reservation usage (last 7 days + future)")
+         print("  pbs-monitor analyze reservation-utilization -d 30  # Analyze last 30 days + future")
          print("  pbs-monitor analyze reservation-utilization --status running  # Show only running reservations")
          print("  pbs-monitor analyze usage-insights --format csv  # Metrics CSV for last 30 days")
          print("  pbs-monitor analyze leaderboard --days 7        # Top users/projects last 7 days")
@@ -784,23 +785,40 @@ class AnalyzeCommand(BaseCommand):
          reservation_ids = getattr(args, 'reservation_ids', None)
          start_date = self._parse_date(getattr(args, 'start_date', None))
          end_date = self._parse_date(getattr(args, 'end_date', None))
+         days = getattr(args, 'days', 7)
+         
+         # Apply default days filter if no explicit dates provided
+         if start_date is None and end_date is None:
+            from datetime import timedelta
+            end_date = None  # No upper bound - include future reservations
+            start_date = datetime.now() - timedelta(days=days)
+            self.console.print(f"[bold blue]Analyzing reservations from last {days} days and future reservations[/bold blue]")
+         elif start_date is None or end_date is None:
+            if start_date is None and end_date is not None:
+               self.console.print(f"[bold blue]Analyzing reservations up to {end_date.strftime('%Y-%m-%d')}[/bold blue]")
+            elif start_date is not None and end_date is None:
+               self.console.print(f"[bold blue]Analyzing reservations from {start_date.strftime('%Y-%m-%d')} onwards[/bold blue]")
+         else:
+            self.console.print(f"[bold blue]Analyzing reservations from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}[/bold blue]")
          
          if reservation_ids:
-            # Analyze specific reservations
+            # Analyze specific reservations - don't override their analysis windows with date filter
             self.console.print(f"[bold blue]Analyzing utilization for reservations: {', '.join(reservation_ids)}[/bold blue]")
             
             utilizations = []
             for res_id in reservation_ids:
                try:
+                  # For specific reservations, only use explicit date overrides from user
+                  user_start = self._parse_date(getattr(args, 'start_date', None)) if getattr(args, 'start_date', None) else None
+                  user_end = self._parse_date(getattr(args, 'end_date', None)) if getattr(args, 'end_date', None) else None
                   utilization = analyzer.analyze_reservation_utilization(
-                     res_id, start_date, end_date
+                     res_id, user_start, user_end
                   )
                   utilizations.append(utilization)
                except Exception as e:
                   self.console.print(f"[red]Error analyzing reservation {res_id}: {str(e)}[/red]")
          else:
-            # Analyze all reservations in time period
-            self.console.print(f"[bold blue]Analyzing utilization for all reservations[/bold blue]")
+            # Analyze all reservations in time period - here we use the date filters for reservation selection
             utilizations = analyzer.analyze_multiple_reservations(
                start_date=start_date, end_date=end_date
             )
