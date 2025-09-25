@@ -465,16 +465,6 @@ class UsageInsights:
             ax.set_title(f'Queue depth over time by allocation type (machine-hours queued per {ts_freq})')
             ax.set_xlabel('')  # Remove x-axis title
             ax.set_ylabel('Machine-hours queued')
-            # Clear any existing formatters and ticks to prevent lingering labels
-            ax.xaxis.set_major_formatter(plt.NullFormatter())
-            ax.xaxis.set_minor_formatter(plt.NullFormatter())
-            ax.xaxis.set_major_locator(plt.NullLocator())
-            ax.xaxis.set_minor_locator(plt.NullLocator())
-            # Format x-axis dates - be more explicit to override pandas defaults
-            import matplotlib.dates as mdates
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-            ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(pivot.index) // 10)))
-            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
             ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Allocation Type', frameon=False)
             if save_dir:
                pth = os.path.join(save_dir, f'queue_depth_machine_hours_by_allocation_per_{ts_freq}.png')
