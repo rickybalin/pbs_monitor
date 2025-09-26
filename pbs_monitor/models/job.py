@@ -123,11 +123,18 @@ class PBSJob:
       
       # Parse timing - handle different field names for completed vs running jobs
       submit_time = cls._parse_pbs_time(job_data.get('qtime'))
-      # For start time: try 'stime' first (for completed jobs), then 'start_time'
-      start_time = cls._parse_pbs_time(job_data.get('stime') or job_data.get('start_time'))
-      # For end time: try 'obittime' first (for completed jobs), then 'comp_time'
-      end_time = cls._parse_pbs_time(job_data.get('obittime') or job_data.get('comp_time'))
-      
+      if state in [JobState.FINISHED, JobState.COMPLETED]:
+         # For end time: try 'mtime' first (for completed jobs)
+         end_time = cls._parse_pbs_time(job_data.get('mtime'))
+         # For start time: 'stime'
+         start_time = cls._parse_pbs_time(job_data.get('stime'))
+      elif state in [JobState.RUNNING]:
+         # For start time: 'stime'
+         start_time = cls._parse_pbs_time(job_data.get('stime'))
+         end_time = None
+      else:
+         end_time = None
+         start_time = None
       # Additional attributes
       priority = int(job_data.get('Priority', '0'))
       execution_node = job_data.get('exec_host')
