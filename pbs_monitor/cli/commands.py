@@ -348,6 +348,7 @@ class JobsCommand(BaseCommand):
       jobs = self.collector.get_jobs(
          user=args.user,
          project=getattr(args, 'project', None),
+         queue=getattr(args, 'queue', None),
          force_refresh=args.refresh
       )
       

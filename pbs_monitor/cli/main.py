@@ -145,6 +145,10 @@ Examples:
       help="Filter by project name (partial string matching)"
    )
    jobs_parser.add_argument(
+      "-q", "--queue",
+      help="Filter by queue name (case-insensitive exact match)"
+   )
+   jobs_parser.add_argument(
       "-s", "--state",
       choices=["R", "Q", "H", "W", "T", "E", "S", "C", "F"],
       help="Filter by job state"

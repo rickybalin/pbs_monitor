@@ -119,6 +119,7 @@ class DataCollector:
    def get_jobs(self, 
                 user: Optional[str] = None,
                 project: Optional[str] = None,
+                queue: Optional[str] = None,
                 force_refresh: bool = False,
                 include_historical: bool = False) -> List[PBSJob]:
       """
@@ -127,6 +128,7 @@ class DataCollector:
       Args:
          user: Filter by username (optional)
          project: Filter by project name using partial string matching (optional)
+         queue: Filter by queue name using case-insensitive exact matching (optional)
          force_refresh: Force refresh from PBS system
          include_historical: Include historical jobs from database
          
@@ -169,6 +171,11 @@ class DataCollector:
       if project:
          project_lower = project.lower()
          jobs = [job for job in jobs if job.project and project_lower in job.project.lower()]
+
+      # Filter by queue if specified (case-insensitive exact match)
+      if queue:
+         queue_lower = queue.lower()
+         jobs = [job for job in jobs if job.queue and job.queue.lower() == queue_lower]
       
       return jobs
    
