@@ -64,6 +64,7 @@ class DataCollector:
       self._last_reservation_update: Optional[datetime] = None
       self._last_server_update: Optional[datetime] = None
       self._last_auto_persist: Optional[datetime] = None
+      self._last_snapshot_persist: Optional[datetime] = None
       
       # Job state tracking for history
       self._job_state_cache: Dict[str, JobStateInfo] = {}
@@ -664,6 +665,30 @@ class DataCollector:
             
             if keys_to_remove:
                self.logger.debug(f"Cleaned up {len(keys_to_remove)} reservation state cache entries (fallback)")
+
+   def _snapshot_collection_due(self) -> bool:
+      """Determine if it's time to collect node/queue/system snapshots."""
+      interval_seconds = getattr(self.config.database, 'snapshot_interval', None)
+      if not interval_seconds or interval_seconds <= 0:
+         return True
+      if self._last_snapshot_persist is None:
+         return True
+      return (datetime.now() - self._last_snapshot_persist) >= timedelta(seconds=interval_seconds)
+
+   def _create_compact_node_snapshot(self, node_repo, data_collection_id: int) -> Optional['NodeSnapshot']:
+      """Build a compact node snapshot string using the latest PBS node data."""
+      if not self._database_enabled:
+         return None
+      node_index_map = node_repo.get_node_index_map()
+      if not node_index_map:
+         self.logger.debug("No node index map available; skipping node snapshot generation")
+         return None
+      snapshot = self._model_converters.node.to_compact_snapshot(
+         self._nodes, node_index_map, data_collection_id=data_collection_id
+      )
+      if snapshot is None:
+         self.logger.debug("Failed to build compact node snapshot; missing node index mapping?")
+      return snapshot
    
    def _detect_and_handle_orphaned_jobs(self, current_pbs_job_ids: Set[str]) -> None:
       """
@@ -932,17 +957,30 @@ class DataCollector:
          # Combine current jobs with completed jobs for database storage
          all_jobs_for_db = self._jobs + completed_jobs
          
+         should_collect_snapshots = self._snapshot_collection_due()
+         queue_snapshots = []
+         system_snapshot = None
+         if should_collect_snapshots:
+            queue_snapshots = [
+               self._model_converters.queue.to_queue_snapshot(queue) for queue in self._queues
+            ]
+            system_snapshot = self._model_converters.system.to_system_snapshot(
+               self._jobs, self._queues, self._nodes
+            )
+         
+         db_nodes = [self._model_converters.node.to_database(node) for node in self._nodes]
+         db_nodes.sort(key=lambda node: node.name)
+         
          # Convert to database models - but use smart job history creation
          db_data = {
             'jobs': [self._model_converters.job.to_database(job) for job in all_jobs_for_db],
             'queues': [self._model_converters.queue.to_database(queue) for queue in self._queues],
-            'nodes': [self._model_converters.node.to_database(node) for node in self._nodes],
+            'nodes': db_nodes,
             'reservations': [self._model_converters.reservation.to_database(reservation) for reservation in self._reservations],
             'job_history': self._create_job_history_for_changes(all_jobs_for_db, log_id),
             'reservation_history': self._create_reservation_history_for_changes(self._reservations, log_id),
-            'queue_snapshots': [self._model_converters.queue.to_queue_snapshot(queue) for queue in self._queues],
-            'node_snapshots': [self._model_converters.node.to_node_snapshot(node) for node in self._nodes],
-            'system_snapshot': self._model_converters.system.to_system_snapshot(self._jobs, self._queues, self._nodes)
+            'queue_snapshots': queue_snapshots,
+            'system_snapshot': system_snapshot
          }
          
          # Clean up cache for jobs and reservations that no longer exist
@@ -961,11 +999,11 @@ class DataCollector:
          self._detect_and_handle_missing_reservations(current_reservation_ids)
          
          # Add collection log ID to remaining entries (job_history already has it)
-         for entry in db_data['queue_snapshots']:
-            entry.data_collection_id = log_id
-         for entry in db_data['node_snapshots']:
-            entry.data_collection_id = log_id
-         db_data['system_snapshot'].data_collection_id = log_id
+         if should_collect_snapshots:
+            for entry in db_data['queue_snapshots']:
+               entry.data_collection_id = log_id
+            if db_data['system_snapshot']:
+               db_data['system_snapshot'].data_collection_id = log_id
          
          # Persist to database
          job_repo = self._repository_factory.get_job_repository()
@@ -980,12 +1018,21 @@ class DataCollector:
          node_repo.upsert_nodes(db_data['nodes'])
          reservation_repo.upsert_reservations(db_data['reservations'])
          
+         node_snapshot = None
+         if should_collect_snapshots:
+            node_snapshot = self._create_compact_node_snapshot(node_repo, log_id)
+         
          # Add historical snapshots
          job_repo.add_job_history_batch(db_data['job_history'])
          reservation_repo.add_reservation_history_batch(db_data['reservation_history'])
-         queue_repo.add_queue_snapshots(db_data['queue_snapshots'])
-         node_repo.add_node_snapshots(db_data['node_snapshots'])
-         system_repo.add_system_snapshot(db_data['system_snapshot'])
+         if should_collect_snapshots:
+            if db_data['queue_snapshots']:
+               queue_repo.add_queue_snapshots(db_data['queue_snapshots'])
+            if node_snapshot is not None:
+               node_repo.add_node_snapshot(node_snapshot)
+            if db_data['system_snapshot'] is not None:
+               system_repo.add_system_snapshot(db_data['system_snapshot'])
+            self._last_snapshot_persist = datetime.now()
          
          # Log completion
          duration = (datetime.now() - collection_start).total_seconds()

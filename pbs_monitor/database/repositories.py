@@ -464,14 +464,22 @@ class QueueRepository(BaseRepository):
 
 class NodeRepository(BaseRepository):
     """Repository for node-related database operations"""
+    def _get_next_snapshot_index(self, session: Session) -> int:
+        """Get the next available snapshot index for a node."""
+        max_index = session.query(func.max(Node.snapshot_index)).scalar()
+        return 0 if max_index is None else max_index + 1
+
     def create_or_update_node(self, node_data: Dict[str, Any]) -> Node:
         with self.get_session() as session:
             n = session.query(Node).filter(Node.name == node_data.get('name')).first()
             if not n:
                 n = Node(name=node_data.get('name'))
+                n.snapshot_index = self._get_next_snapshot_index(session)
                 session.add(n)
             for key, value in node_data.items():
                 if hasattr(n, key):
+                    if key == 'snapshot_index' and value is None:
+                        continue
                     setattr(n, key, value)
             session.commit()
             session.refresh(n)
@@ -523,15 +531,20 @@ class NodeRepository(BaseRepository):
     def upsert_nodes(self, nodes: List[Node]) -> None:
         """Insert or update nodes in database"""
         with self.get_session() as session:
-            for node in nodes:
+            for node in sorted(nodes, key=lambda n: n.name):
                 existing = session.query(Node).filter(Node.name == node.name).first()
                 if existing:
                     # Update existing node
                     for attr, value in node.__dict__.items():
-                        if not attr.startswith('_'):
-                            setattr(existing, attr, value)
+                        if attr.startswith('_'):
+                            continue
+                        if attr == 'snapshot_index':
+                            continue
+                        setattr(existing, attr, value)
                 else:
                     # Add new node
+                    if node.snapshot_index is None:
+                        node.snapshot_index = self._get_next_snapshot_index(session)
                     session.add(node)
             session.commit()
     
@@ -552,54 +565,28 @@ class NodeRepository(BaseRepository):
                 return True
             return False
     
-    def get_node_snapshots(self, node_name: str, hours: int = 24) -> List[NodeSnapshot]:
+    def get_node_snapshots(self, hours: int = 24) -> List[NodeSnapshot]:
         """Get recent node snapshots"""
         cutoff_time = datetime.now() - timedelta(hours=hours)
         with self.get_session() as session:
             return session.query(NodeSnapshot).filter(
-                and_(NodeSnapshot.node_name == node_name,
-                     NodeSnapshot.timestamp >= cutoff_time)
+                NodeSnapshot.timestamp >= cutoff_time
             ).order_by(NodeSnapshot.timestamp).all()
     
-    def add_node_snapshot(self, node_name: str | NodeSnapshot, snapshot_data: Optional[Dict[str, Any]] = None) -> NodeSnapshot:
-        """Add node snapshot. Accepts either a NodeSnapshot or (node_name, data)."""
+    def add_node_snapshot(self, snapshot: NodeSnapshot) -> NodeSnapshot:
+        """Add node snapshot entry."""
         with self.get_session() as session:
-            if isinstance(node_name, NodeSnapshot):
-                snap = node_name
-            else:
-                data = snapshot_data or {}
-                filtered = {k: v for k, v in data.items() if hasattr(NodeSnapshot, k)}
-                snap = NodeSnapshot(node_name=node_name, **filtered)
-            session.add(snap)
+            session.add(snapshot)
             session.commit()
-            session.refresh(snap)
-            session.expunge(snap)
-            return snap
+            session.refresh(snapshot)
+            session.expunge(snapshot)
+            return snapshot
     
-    def add_node_snapshots(self, snapshots: List[NodeSnapshot]) -> None:
-        """Add multiple node snapshots"""
+    def get_node_index_map(self) -> Dict[str, int]:
+        """Return mapping of node name to snapshot index."""
         with self.get_session() as session:
-            session.add_all(snapshots)
-            session.commit()
-    
-    def get_node_utilization_history(self, node_name: str, days: int = 7) -> List[Dict[str, Any]]:
-        """Get node utilization history"""
-        cutoff_time = datetime.now() - timedelta(days=days)
-        with self.get_session() as session:
-            snapshots = session.query(NodeSnapshot).filter(
-                and_(NodeSnapshot.node_name == node_name,
-                     NodeSnapshot.timestamp >= cutoff_time)
-            ).order_by(NodeSnapshot.timestamp).all()
-            
-            return [
-                {
-                    'timestamp': snapshot.timestamp,
-                    'cpu_utilization_percent': snapshot.cpu_utilization_percent,
-                    'jobs_count': snapshot.jobs_count,
-                    'load_percent': snapshot.load_percent
-                }
-                for snapshot in snapshots
-            ]
+            nodes = session.query(Node.name, Node.snapshot_index).order_by(Node.snapshot_index).all()
+            return {name: index for name, index in nodes if index is not None}
 
 
 class SystemRepository(BaseRepository):

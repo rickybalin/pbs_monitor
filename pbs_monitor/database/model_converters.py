@@ -10,7 +10,12 @@ from datetime import datetime
 
 from ..models.job import PBSJob, JobState as PBSJobState
 from ..models.queue import PBSQueue, QueueState as PBSQueueState
-from ..models.node import PBSNode, NodeState as PBSNodeState
+from ..models.node import (
+    PBSNode,
+    NodeState as PBSNodeState,
+    node_state_to_char,
+    NODE_SNAPSHOT_MISSING_CHAR
+)
 from ..models.reservation import PBSReservation, ReservationState as PBSReservationState
 from .models import (
     Job, Queue, Node, Reservation, JobHistory, QueueSnapshot, NodeSnapshot, SystemSnapshot,
@@ -240,17 +245,25 @@ class NodeConverter:
         )
     
     @staticmethod
-    def to_node_snapshot(pbs_node: PBSNode, data_collection_id: Optional[int] = None) -> NodeSnapshot:
-        """Convert PBSNode to NodeSnapshot entry"""
+    def to_compact_snapshot(pbs_nodes: List[PBSNode],
+                            node_index_map: Dict[str, int],
+                            data_collection_id: Optional[int] = None) -> Optional[NodeSnapshot]:
+        """Convert PBS nodes into a compact NodeSnapshot entry."""
+        if not node_index_map:
+            return None
+        max_index = max(node_index_map.values())
+        if max_index < 0:
+            return None
+        snapshot_chars = [NODE_SNAPSHOT_MISSING_CHAR] * (max_index + 1)
+        for pbs_node in pbs_nodes:
+            index = node_index_map.get(pbs_node.name)
+            if index is None or index >= len(snapshot_chars):
+                continue
+            snapshot_chars[index] = node_state_to_char(pbs_node.state)
         return NodeSnapshot(
-            node_name=pbs_node.name,
             timestamp=datetime.now(),
-            state=NodeState(pbs_node.state.value),
-            jobs_running=len(pbs_node.jobs),
-            jobs_list=pbs_node.jobs,
-            load_average=pbs_node.loadavg,
-            cpu_utilization_percent=pbs_node.cpu_utilization(),
-            memory_used_gb=pbs_node.memory_gb() if pbs_node.memory_gb() else None,
+            snapshot_data=''.join(snapshot_chars),
+            node_count=len(snapshot_chars),
             data_collection_id=data_collection_id
         )
 

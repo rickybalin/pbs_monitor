@@ -18,6 +18,7 @@ A comprehensive Python toolkit for monitoring and managing PBS (Portable Batch S
 - **History Command**: Comprehensive interface for analyzing completed jobs
 - **Database Management**: Complete CLI for database operations
 - **Background Daemon**: Continuous data collection service with process management
+- **Compact Node Snapshots**: Fixed-width string encoding dramatically reduces storage bloat
 - **On-Demand Collection**: --collect flag for immediate database persistence
 - **Concurrent Access**: Multi-user and multi-process support
 - **Data Quality**: Validation, auditing, and error handling
@@ -75,6 +76,17 @@ pbs-monitor database status
 # Show database information
 pbs-monitor database validate
 ```
+
+#### Migrating data from an older database
+If you created a fresh database after the compact snapshot redesign, you can backfill jobs and reservations from an older file using the helper script:
+
+```bash
+python scripts/migrate_db.py \
+  --source /path/to/pbs_monitor.db_2025-12-15 \
+  --dest   /path/to/pbs_monitor.db
+```
+
+By default the script copies job/reservation tables and skips legacy node snapshots. Pass `--tables` or `--keep-existing` for finer control.
 
 ## Quick Start
 
