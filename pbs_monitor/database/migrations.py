@@ -222,8 +222,8 @@ class DatabaseMigration:
                 'job_history': ['id', 'job_id', 'timestamp', 'state'],
                 'queues': ['name', 'queue_type', 'max_running'],
                 'queue_snapshots': ['id', 'queue_name', 'timestamp', 'state'],
-                'nodes': ['name', 'ncpus', 'memory_gb'],
-                'node_snapshots': ['id', 'node_name', 'timestamp', 'state'],
+                'nodes': ['name', 'ncpus', 'memory_gb', 'snapshot_index'],
+                'node_snapshots': ['id', 'timestamp', 'snapshot_data', 'node_count'],
                 'system_snapshots': ['id', 'timestamp', 'total_jobs'],
                 'data_collection_log': ['id', 'timestamp', 'collection_type', 'status']
             }

@@ -335,64 +335,31 @@ class Node(Base):
     first_seen = Column(DateTime(timezone=True), default=func.now())
     last_updated = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     is_active = Column(Boolean, default=True)
+    snapshot_index = Column(Integer, unique=True)
     
     # Raw data
     raw_pbs_data = Column(JSON)
     
-    # Relationships
-    snapshots = relationship("NodeSnapshot", back_populates="node")
-    
-    def is_available(self) -> bool:
-        """Check if node is available (from latest snapshot)"""
-        if not self.snapshots:
-            return False
-        latest = max(self.snapshots, key=lambda s: s.timestamp)
-        return latest.state in [NodeState.FREE, NodeState.JOB_SHARING]
-    
-    def is_occupied(self) -> bool:
-        """Check if node is occupied (from latest snapshot)"""
-        if not self.snapshots:
-            return False
-        latest = max(self.snapshots, key=lambda s: s.timestamp)
-        return latest.jobs_running > 0
+    # Relationships (node snapshots now stored in compact form)
 
 class NodeSnapshot(Base):
     """
     Point-in-time node utilization snapshots
     
-    Captures node state and job assignments at regular intervals.
-    Used for resource utilization analysis and capacity planning.
+    Encodes the state of all nodes as a compact string, where each character
+    represents the NodeState of the node assigned to that slot.
     """
     __tablename__ = 'node_snapshots'
     
     id = Column(Integer, primary_key=True)
-    node_name = Column(String(100), ForeignKey('nodes.name'), index=True)
-    timestamp = Column(DateTime(timezone=True), default=func.now())
-    
-    # State
-    state = Column(SQLEnum(NodeState))
-    
-    # Resource usage
-    jobs_running = Column(Integer, default=0)
-    jobs_list = Column(JSON)
-    
-    # Performance metrics
-    load_average = Column(Float)
-    cpu_utilization_percent = Column(Float)
-    memory_used_gb = Column(Float)
-    
-    # System info
+    timestamp = Column(DateTime(timezone=True), default=func.now(), index=True)
+    snapshot_data = Column(Text, nullable=False)
+    node_count = Column(Integer, default=0)
     data_collection_id = Column(Integer, ForeignKey('data_collection_log.id'))
     
     # Relationships
-    node = relationship("Node", back_populates="snapshots")
     collection_event = relationship("DataCollectionLog")
     
-    # Indexes
-    __table_args__ = (
-        Index('ix_node_snapshots_name_timestamp', 'node_name', 'timestamp'),
-    )
-
 class SystemSnapshot(Base):
     """
     Overall system state snapshots

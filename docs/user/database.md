@@ -59,8 +59,24 @@ pbs-monitor history -s F --sort runtime --reverse --limit 50
 
 - jobs: current/final job state (one per job)
 - job_history: every job state change
-- queues, nodes: configuration and properties
-- queue_snapshots, node_snapshots, system_snapshots: historical utilization
+- reservations & reservation_history: reservation lifecycle tracking
+- queues, nodes: configuration and properties (nodes include a `snapshot_index` for compact snapshots)
+- queue_snapshots: queue stats over time
+- node_snapshots: single string per collection representing all node states (one character per node slot)
+- system_snapshots: overall cluster metrics
 - data_collection_log: audit trail of collection events
 
+Node snapshots are now stored as a compact string so each collection writes a single row regardless of cluster size. When a node does not report during a collection, its slot contains `0`.
+
+## Migrating legacy databases
+
+If you initialized a fresh database and want to backfill jobs/reservations from an older file, use the helper script:
+
+```bash
+python scripts/migrate_db.py \
+  --source /path/to/pbs_monitor.db_2025-12-15 \
+  --dest   /path/to/pbs_monitor.db
+```
+
+By default the script copies `jobs`, `job_history`, `reservations`, `reservation_history`, and `reservation_utilization`, truncating the destination tables before inserting. Use `--tables` to adjust the list or `--keep-existing` to merge without truncation. Node snapshots are intentionally skipped, since the new schema stores them in a different format.
 

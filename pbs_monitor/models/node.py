@@ -25,6 +25,33 @@ class NodeState(Enum):
    UNKNOWN = "unknown"
 
 
+# Snapshot encoding helpers
+NODE_STATE_CHAR_MAP = {
+   NodeState.FREE: "A",
+   NodeState.OFFLINE: "B",
+   NodeState.DOWN: "C",
+   NodeState.BUSY: "D",
+   NodeState.JOB_EXCLUSIVE: "E",
+   NodeState.JOB_SHARING: "F",
+   NodeState.RESERVE: "G",
+   NodeState.RESV_EXCLUSIVE: "H",
+   NodeState.DOWN_OFFLINE: "I",
+   NodeState.STATE_UNKNOWN_DOWN: "J",
+   NodeState.STATE_UNKNOWN_DOWN_OFFLINE: "K",
+   NodeState.JOB_EXCLUSIVE_RESV_EXCLUSIVE: "L",
+   NodeState.OFFLINE_RESV_EXCLUSIVE: "M",
+   NodeState.UNKNOWN: "N"
+}
+
+# Character used when a node has no data in a snapshot
+NODE_SNAPSHOT_MISSING_CHAR = "0"
+
+
+def node_state_to_char(state: NodeState) -> str:
+   """Encode a NodeState to its single-character representation."""
+   return NODE_STATE_CHAR_MAP.get(state, NODE_STATE_CHAR_MAP[NodeState.UNKNOWN])
+
+
 @dataclass
 class PBSNode:
    """Represents a PBS compute node"""

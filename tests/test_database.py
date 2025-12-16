@@ -12,7 +12,7 @@ from pbs_monitor.config import Config
 from pbs_monitor.database import (
     get_database_manager, create_tables, initialize_database,
     Job, JobHistory, Queue, QueueSnapshot, Node, NodeSnapshot,
-    JobState, QueueState, NodeState, DataCollectionStatus,
+    JobState, QueueState, DataCollectionStatus,
     JobRepository, QueueRepository, NodeRepository, SystemRepository,
     get_repository_factory
 )
@@ -245,28 +245,19 @@ class TestDatabaseRepositories:
         node_repo = NodeRepository(initialized_db)
         
         # Create node
-        node_data = {
-            'name': 'snapshot_node',
-            'ncpus': 16
-        }
-        node_repo.create_or_update_node(node_data)
+        node_repo.create_or_update_node({'name': 'alpha', 'ncpus': 16})
+        node_repo.create_or_update_node({'name': 'beta', 'ncpus': 32})
         
-        # Add snapshot
-        snapshot_data = {
-            'state': NodeState.BUSY,
-            'jobs_running': 8,
-            'jobs_list': ['100.pbs01', '101.pbs01'],
-            'cpu_utilization_percent': 75.0
-        }
+        nodes = node_repo.get_all_nodes()
+        assert all(node.snapshot_index is not None for node in nodes)
         
-        snapshot = node_repo.add_node_snapshot('snapshot_node', snapshot_data)
+        snapshot = NodeSnapshot(snapshot_data="AB", node_count=2)
+        stored = node_repo.add_node_snapshot(snapshot)
         
-        assert snapshot.node_name == 'snapshot_node'
-        assert snapshot.jobs_running == 8
-        assert snapshot.cpu_utilization_percent == 75.0
+        assert stored.snapshot_data == "AB"
+        assert stored.node_count == 2
         
-        # Get snapshots
-        snapshots = node_repo.get_node_snapshots('snapshot_node')
+        snapshots = node_repo.get_node_snapshots()
         assert len(snapshots) == 1
 
 
