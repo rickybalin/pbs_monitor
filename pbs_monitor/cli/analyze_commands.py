@@ -544,8 +544,6 @@ class AnalyzeCommand(BaseCommand):
          out_dir = getattr(args, 'output_dir', None)
          output_format = getattr(args, 'format', 'table')
          ts_freq = getattr(args, 'ts_freq', 'D')
-         per_user_top_n = getattr(args, 'per_user_top_n', 20)
-         per_user_min_jobs = getattr(args, 'per_user_min_jobs', 3)
 
          qf = QueueFilter(
             days=days,
@@ -585,8 +583,6 @@ class AnalyzeCommand(BaseCommand):
             df,
             days=days,
             save_dir=out_dir,
-            per_user_top_n=per_user_top_n,
-            per_user_min_jobs=per_user_min_jobs,
             ts_freq=ts_freq
          )
          saved = {**(saved_basic or {}), **(saved_adv or {})}

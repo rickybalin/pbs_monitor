@@ -8,7 +8,6 @@ Milestone 1 implements:
   - Score at start vs requested node-hours (by queue)
   - Start-score distribution by queue
   - ECDF of wait time by queue
-  - Rolling median start-score over time (per queue)
 
 Outputs can be saved to disk and/or returned to callers (e.g., notebooks).
 """
@@ -304,28 +303,6 @@ class UsageInsights:
       except Exception as e:
          self.logger.debug(f"Plot ecdf_wait_by_allocation_type failed: {e}")
 
-      # 5) Rolling median start-score over time (per queue)
-      try:
-         fig, ax = plt.subplots(figsize=(14, 6))
-         # Resample per queue on start_time, rolling median 7 days
-         if not pd.api.types.is_datetime64_any_dtype(df['start_time']):
-            df['start_time'] = pd.to_datetime(df['start_time'])
-         for q, sub in df[['start_time','queue','start_score']].dropna().groupby('queue'):
-            sub_sorted = sub.sort_values('start_time').set_index('start_time')
-            med = sub_sorted['start_score'].rolling('7D', min_periods=3).median()
-            ax.plot(med.index, med.values, label=str(q), color=queue_palette.get(str(q)))
-         ax.set_title('Rolling 7-day median of start-score (per queue)')
-         ax.set_xlabel('Time')
-         ax.set_ylabel('Start-score (median)')
-         ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Queue', frameon=False)
-         if save_dir:
-            pth = os.path.join(save_dir, 'rolling_median_start_score_by_queue.png')
-            fig.savefig(pth, bbox_inches='tight', dpi=dpi)
-            outputs['rolling_median_start_score_by_queue'] = pth
-         plt.close(fig)
-      except Exception as e:
-         self.logger.debug(f"Plot rolling_median_start_score_by_queue failed: {e}")
-
       return outputs
 
    def generate_plots_extended(
@@ -334,16 +311,12 @@ class UsageInsights:
       days: int = 30,
       save_dir: Optional[str] = None,
       dpi: int = 120,
-      per_user_top_n: int = 20,
-      per_user_min_jobs: int = 3,
       ts_freq: str = 'D'
    ) -> Dict[str, str]:
       """
       Generate advanced plot suite:
-      - Throughput over time (stacked area of node-hours started per day) by queue
       - Backlog over time (node-hours queued) by queue
       - Active nodes over time by queue (stacked area)
-      - Per-user distributions and summaries
 
       Returns mapping of plot name to saved file path when saved.
       """
@@ -378,49 +351,6 @@ class UsageInsights:
       except Exception:
          queues = []
       queue_palette = self._build_queue_palette(queues)
-
-      # ---- Throughput over time (used node-hours started per period) by queue ----
-      try:
-         th_df = self._compute_used_node_hours_by_queue_timeseries(df, window_start, freq=ts_freq)
-         if not th_df.empty:
-            pivot = th_df.pivot_table(index='timestamp', columns='queue', values='used_node_hours', aggfunc='sum').fillna(0.0)
-            fig, ax = plt.subplots(figsize=(14, 6))
-            color_order = [queue_palette.get(str(c)) for c in pivot.columns]
-            pivot.plot.area(ax=ax, color=color_order)
-            ax.set_title(f'Throughput over time (used node-hours started per {ts_freq})')
-            ax.set_xlabel('')  # Remove x-axis title
-            ax.set_ylabel('Used node-hours started')
-            ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Queue', frameon=False)
-            if save_dir:
-               pth = os.path.join(save_dir, f'throughput_node_hours_per_{ts_freq}.png')
-               fig.savefig(pth, bbox_inches='tight', dpi=dpi)
-               outputs['throughput_node_hours'] = pth
-            plt.close(fig)
-      except Exception as e:
-         self.logger.debug(f"Plot throughput_node_hours failed: {e}")
-
-      # ---- Throughput over time (used node-hours started per period) by allocation type ----
-      try:
-         th_alloc_df = self._compute_used_node_hours_by_allocation_timeseries(df, window_start, freq=ts_freq)
-         if not th_alloc_df.empty:
-            pivot = th_alloc_df.pivot_table(index='timestamp', columns='allocation_type', values='used_node_hours', aggfunc='sum').fillna(0.0)
-            fig, ax = plt.subplots(figsize=(14, 6))
-            # Build consistent palette for allocation types
-            alloc_types = sorted(pivot.columns.astype(str).tolist())
-            alloc_palette = self._build_allocation_palette(alloc_types)
-            color_order = [alloc_palette.get(str(c)) for c in pivot.columns]
-            pivot.plot.area(ax=ax, color=color_order)
-            ax.set_title(f'Throughput over time by allocation type (used node-hours started per {ts_freq})')
-            ax.set_xlabel('')  # Remove x-axis title
-            ax.set_ylabel('Used node-hours started')
-            ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Allocation Type', frameon=False)
-            if save_dir:
-               pth = os.path.join(save_dir, f'throughput_node_hours_by_allocation_per_{ts_freq}.png')
-               fig.savefig(pth, bbox_inches='tight', dpi=dpi)
-               outputs['throughput_node_hours_by_allocation'] = pth
-            plt.close(fig)
-      except Exception as e:
-         self.logger.debug(f"Plot throughput_node_hours_by_allocation failed: {e}")
 
       # ---- Queue depth over time (machine-hours queued) by queue ----
       try:
@@ -582,54 +512,7 @@ class UsageInsights:
       except Exception as e:
          self.logger.debug(f"Plot utilization_percent failed: {e}")
 
-      # ---- Per-user distributions ----
-      try:
-         # Focus on users with at least per_user_min_jobs, take top N by job count
-         counts = df.groupby('owner')['job_id'].count().sort_values(ascending=False)
-         selected_users = counts[counts >= int(per_user_min_jobs)].head(int(per_user_top_n)).index.tolist()
-         sub = df[df['owner'].isin(selected_users)].copy()
-
-         if not sub.empty:
-            # 1) Slowdown distributions by user (violin)
-            try:
-               fig, ax = plt.subplots(figsize=(12, 6))
-               sns.violinplot(data=sub, x='owner', y='slowdown', inner=None, cut=0, ax=ax)
-               sns.boxplot(data=sub, x='owner', y='slowdown', width=0.25, showcaps=True, boxprops={'facecolor':'none'}, ax=ax)
-               ax.set_title('User slowdown distributions (selected users)')
-               ax.set_xlabel('User')
-               ax.set_ylabel('Slowdown')
-               fig.autofmt_xdate(rotation=30)
-               if save_dir:
-                  pth = os.path.join(save_dir, 'user_slowdown_distributions.png')
-                  fig.savefig(pth, bbox_inches='tight', dpi=dpi)
-                  outputs['user_slowdown_distributions'] = pth
-               plt.close(fig)
-            except Exception as e:
-               self.logger.debug(f"Plot user_slowdown_distributions failed: {e}")
-
-            # 2) Median wait vs average requested node-hours per user (scatter)
-            try:
-               agg = sub.groupby('owner').agg(
-                  median_wait_hours=pd.NamedAgg(column='wait_time_hours', aggfunc='median'),
-                  avg_req_node_hours=pd.NamedAgg(column='requested_node_hours', aggfunc='mean'),
-                  jobs=pd.NamedAgg(column='job_id', aggfunc='count')
-               ).reset_index()
-               fig, ax = plt.subplots(figsize=(10, 6))
-               sizes = (50 + 5 * agg['jobs'].astype(float).clip(upper=500.0)).values
-               scatter = ax.scatter(agg['avg_req_node_hours'], agg['median_wait_hours'], s=sizes, alpha=0.7)
-               ax.set_xscale('log')
-               ax.set_xlabel('Average requested node-hours (log)')
-               ax.set_ylabel('Median wait time (hours)')
-               ax.set_title('Per-user median wait vs average requested node-hours')
-               if save_dir:
-                  pth = os.path.join(save_dir, 'user_median_wait_vs_avg_node_hours.png')
-                  fig.savefig(pth, bbox_inches='tight', dpi=dpi)
-                  outputs['user_median_wait_vs_avg_node_hours'] = pth
-               plt.close(fig)
-            except Exception as e:
-               self.logger.debug(f"Plot user_median_wait_vs_avg_node_hours failed: {e}")
-      except Exception as e:
-         self.logger.debug(f"Per-user plots failed: {e}")
+      # Per-user plots removed (user feedback indicated low value)
 
       return outputs
 
@@ -1481,6 +1364,3 @@ class UsageInsights:
       
       self.logger.warning("Could not determine total cluster nodes using any method")
       return None
-
-
-

@@ -617,18 +617,6 @@ Examples:
       help="Time-series frequency for advanced plots: H (hourly), D (daily), W (weekly)"
    )
    usage_insights_parser.add_argument(
-       "-U", "--per-user-top-n",
-      type=int,
-      default=20,
-      help="Top N users by job count to include in per-user plots (advanced suite)"
-   )
-   usage_insights_parser.add_argument(
-       "-j", "--per-user-min-jobs",
-      type=int,
-      default=3,
-      help="Minimum jobs per user to be included in per-user plots (advanced suite)"
-   )
-   usage_insights_parser.add_argument(
       "--total-cluster-nodes",
       type=int,
       help=argparse.SUPPRESS
