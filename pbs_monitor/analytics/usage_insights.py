@@ -327,13 +327,138 @@ class UsageInsights:
             ])
 
          # Build raw records with derived metrics
+         # --- OPTIMIZATION START ---
+         stats = {
+            'total_jobs': len(jobs),
+            'scores_calculated': 0,
+            'scores_from_db': 0,
+            'scores_missing': 0
+         }
+         
+         # Initialize PBSCommands for on-the-fly calculation
+         pbs_cmds = PBSCommands()
+         server_data = None
+         server_defaults = None
+         try:
+            # Try to get server data for formula/defaults
+            # This might fail if PBS is not reachable, but we should try
+            if pbs_cmds.test_connection():
+               server_data = pbs_cmds.qstat_server()
+               # Extract server defaults
+               server_info = server_data.get("Server", {})
+               for _, details in server_info.items():
+                  server_defaults = details.get("resources_default", {})
+                  break
+         except Exception as e:
+            self.logger.warning(f"Failed to fetch PBS server data for score calculation: {e}")
+
+         # Dictionary to store resolved scores
+         job_start_scores: Dict[str, float] = {} # job_id -> score
+         jobs_needing_db: List[Job] = []
+
+         for job in jobs:
+            score_found = False
+            # Try calculation first
+            if server_data and getattr(job, 'raw_pbs_data', None):
+               try:
+                  # Ensure raw_pbs_data is a dict
+                  raw_data = job.raw_pbs_data
+                  if isinstance(raw_data, dict):
+                     # We need eligible_time and Resource_List
+                     # Check if calculation is possible
+                     calc_score = pbs_cmds.calculate_job_score(
+                        raw_data, 
+                        server_defaults=server_defaults, 
+                        server_data=server_data
+                     )
+                     if calc_score is not None:
+                        job_start_scores[job.job_id] = calc_score
+                        stats['scores_calculated'] += 1
+                        score_found = True
+               except Exception as e:
+                  # Fallback to DB if calculation crashes
+                  pass
+            
+            if not score_found:
+               jobs_needing_db.append(job)
+
+         # Fallback: Batch DB query for remaining jobs
+         if jobs_needing_db:
+            job_ids = [j.job_id for j in jobs_needing_db]
+            
+            # Chunking to avoid SQL variable limits
+            chunk_size = 500
+            history_map = {}
+            
+            for i in range(0, len(job_ids), chunk_size):
+                chunk_ids = job_ids[i:i + chunk_size]
+                try:
+                    history_records = session.query(
+                        JobHistory.job_id, JobHistory.timestamp, JobHistory.score
+                    ).filter(
+                        JobHistory.job_id.in_(chunk_ids),
+                        JobHistory.score.isnot(None)
+                    ).all()
+                    
+                    for jid, ts, sc in history_records:
+                        if jid not in history_map:
+                            history_map[jid] = []
+                        history_map[jid].append((ts, sc))
+                except Exception as e:
+                    self.logger.error(f"Batch history lookup failed for chunk {i}: {e}")
+
+            # Resolve scores for each job
+            for job in jobs_needing_db:
+               hist_list = history_map.get(job.job_id, [])
+               if not hist_list:
+                  stats['scores_missing'] += 1
+                  continue
+                  
+               # We want last score <= start_time
+               start_time = job.start_time
+               if not start_time:
+                  stats['scores_missing'] += 1
+                  continue
+                  
+               # Sort entries by timestamp
+               hist_list.sort(key=lambda x: x[0])
+               
+               best_score = None
+               # Look for last entry <= start_time
+               # This linear scan is fast enough for small history lists per job
+               candidates = [h for h in hist_list if h[0] <= start_time]
+               if candidates:
+                  best_score = float(candidates[-1][1])
+               else:
+                  # Fallback: first entry > start_time (nearest future)
+                  future_candidates = [h for h in hist_list if h[0] > start_time]
+                  if future_candidates:
+                     best_score = float(future_candidates[0][1])
+               
+               if best_score is not None:
+                  job_start_scores[job.job_id] = best_score
+                  stats['scores_from_db'] += 1
+               else:
+                  stats['scores_missing'] += 1
+
+         # Report stats
+         self.logger.info(
+               f"Score stats: Total={stats['total_jobs']}, "
+               f"Calculated={stats['scores_calculated']}, "
+               f"DB-Retrieved={stats['scores_from_db']}, "
+               f"Missing={stats['scores_missing']}"
+         )
+         # Print to console for user visibility
+         print(f"Usage Insights Score Stats: Calculated {stats['scores_calculated']} | DB-Lookup {stats['scores_from_db']} | Missing {stats['scores_missing']} (Total {stats['total_jobs']})")
+
          records: List[Dict[str, object]] = []
          for job in jobs:
+
             try:
                walltime_hours = self._parse_walltime_to_hours(job.walltime)
                wait_h = self._compute_wait_hours(job.submit_time, job.start_time)
                run_h = self._compute_run_hours(job.start_time, job.end_time)
-               start_score = self._find_start_score(session, job)
+               start_score = job_start_scores.get(job.job_id) # Using pre-calculated/fetched score
                requested_node_hours = (job.nodes or 0) * walltime_hours
                records.append({
                   'job_id': job.job_id,
@@ -795,6 +920,8 @@ class UsageInsights:
                self.submit_time = pbs_job.submit_time
                self.start_time = pbs_job.start_time
                self.end_time = pbs_job.end_time
+               # Pass through raw attributes for calculation
+               self.raw_pbs_data = pbs_job.raw_attributes
                # Convert PBSJobState to JobState
                if pbs_job.state == PBSJobState.QUEUED:
                   self.state = JobState.QUEUED
