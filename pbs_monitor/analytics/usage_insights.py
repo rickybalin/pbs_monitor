@@ -844,8 +844,8 @@ class UsageInsights:
                
                # Format x-axis dates and rotate labels
                import matplotlib.dates as mdates
+               ax.xaxis.set_major_locator(mdates.AutoDateLocator())
                ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-               ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(utilization_pct.index) // 10)))
                plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
                # Force the formatter to be applied
                fig.autofmt_xdate(rotation=45)
