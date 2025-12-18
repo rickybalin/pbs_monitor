@@ -44,6 +44,7 @@ from ..database.models import Job, JobHistory, JobState
 from ..data_collector import DataCollector
 from ..models.job import PBSJob, JobState as PBSJobState
 from ..pbs_commands import PBSCommands
+import matplotlib.ticker as mticker
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,9 +61,216 @@ class QueueFilter:
    reservation_queue_regex: str = r'^[MRS]\d+$'
 
 
+   reservation_queue_regex: str = r'^[MRS]\d+$'
+
+
 class UsageInsights:
    """Compute usage insight metrics and generate plots."""
 
+   def compare_time_periods(
+      self,
+      a_start: datetime, a_end: datetime,
+      b_start: datetime, b_end: datetime,
+      group_by: str = 'queue',
+      save_dir: Optional[str] = None
+   ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, str]]:
+      """
+      Compare job throughput and metrics between two time periods (A and B).
+      
+      Returns:
+          metrics: Dict containing summary DataFrames
+          plots: Dict mapping plot names to file paths
+      """
+      outputs = {}
+      metrics = {}
+      
+      # 1. Fetch data for both periods
+      df_a = self._fetch_period_data(a_start, a_end)
+      df_b = self._fetch_period_data(b_start, b_end)
+      
+      df_a['period'] = 'A'
+      df_b['period'] = 'B'
+      
+      if df_a.empty:
+         raise ValueError(f"Period A ({a_start} to {a_end}) has no data.")
+      if df_b.empty:
+         raise ValueError(f"Period B ({b_start} to {b_end}) has no data.")
+      
+      combined = pd.concat([df_a, df_b], ignore_index=True)
+      
+      os.makedirs(save_dir, exist_ok=True) if save_dir else None
+      
+      # Helper for plotting settings
+      if plt and sns:
+           sns.set_context('talk')
+           sns.set_style('whitegrid')
+      
+      # 2. Compute Aggregate Throughput (Total Node-Hours)
+      total_a = df_a['requested_node_hours'].sum()
+      total_b = df_b['requested_node_hours'].sum()
+      
+      # 3. Grouped Comparison
+      # Pivot table: Index=Category, Columns=Period, Values=NodeHours
+      if group_by not in combined.columns:
+          group_by = 'queue' # fallback
+          
+      grouped = combined.groupby([group_by, 'period'])['requested_node_hours'].sum().reset_index()
+      
+      # Create summary table for return
+      summary_pivot = grouped.pivot(index=group_by, columns='period', values='requested_node_hours').fillna(0.0)
+      
+      # Ensure A and B columns exist even if one period had no data
+      for col in ['A', 'B']:
+         if col not in summary_pivot.columns:
+            summary_pivot[col] = 0.0
+
+      summary_pivot['diff'] = summary_pivot['B'] - summary_pivot['A']
+      
+      # Avoid division by zero: replace 0 in denominator with 1 (or NaN to signify undefined)
+      # We use copy to avoid setting on copy warning
+      denom = summary_pivot['A'].replace(0.0, np.nan)
+      summary_pivot['pct_change'] = (summary_pivot['diff'] / denom) * 100.0
+      summary_pivot['pct_change'] = summary_pivot['pct_change'].fillna(0.0) # or leave as NaN? Let's say 0 change if start is 0
+
+      # Reset index to make group_by a column
+      metrics['summary_table'] = summary_pivot.reset_index()
+      
+      # --- PLOTTING ---
+      if plt is None or sns is None:
+         return metrics, outputs
+
+      # Plot 1: Total Throughput Comparison
+      try:
+         fig, ax = plt.subplots(figsize=(8, 6))
+         sns.barplot(x=['Period A', 'Period B'], y=[total_a, total_b], ax=ax, palette=['royalblue', 'darkorange'])
+         ax.set_title(f'Total Throughput (Node-Hours)\nPeriod A: {a_start.date()} to {a_end.date()}\nPeriod B: {b_start.date()} to {b_end.date()}')
+         ax.set_ylabel('Node-Hours')
+         
+         # Add labels
+         for i, v in enumerate([total_a, total_b]):
+            ax.text(i, v, f'{int(v):,}', ha='center', va='bottom')
+            
+         if save_dir:
+            pth = os.path.join(save_dir, 'total_throughput_comparison.png')
+            fig.savefig(pth, bbox_inches='tight', dpi=120)
+            outputs['total_throughput'] = pth
+         plt.close(fig)
+      except Exception as e:
+         self.logger.warning(f"Plot total_throughput failed: {e}")
+
+      # Plot 2: Grouped Breakdown
+      try:
+         # Filter top N categories to avoid clutter if too many
+         top_cats = combined.groupby(group_by)['requested_node_hours'].sum().nlargest(15).index
+         plot_df = grouped[grouped[group_by].isin(top_cats)].copy()
+         
+         fig, ax = plt.subplots(figsize=(12, 8))
+         sns.barplot(data=plot_df, x=group_by, y='requested_node_hours', hue='period', 
+                     palette={'A': 'royalblue', 'B': 'darkorange'}, ax=ax)
+         ax.set_title(f'Throughput by {group_by}')
+         ax.set_ylabel('Requested Node-Hours')
+         plt.xticks(rotation=45, ha='right')
+         ax.legend(title='Period')
+         
+         if save_dir:
+            pth = os.path.join(save_dir, f'throughput_by_{group_by}.png')
+            fig.savefig(pth, bbox_inches='tight', dpi=120)
+            outputs['throughput_breakdown'] = pth
+         plt.close(fig)
+      except Exception as e:
+         self.logger.warning(f"Plot throughput_by_{group_by} failed: {e}")
+
+      # Plot 3: Weighted Histogram of Wait Time (Node-Hours)
+      try:
+         fig, ax = plt.subplots(figsize=(12, 6))
+         
+         # We want to bin wait_time_hours, weighted by requested_node_hours
+         # Use common bins for A and B
+         # Log scale often makes sense for wait times, but let's stick to linear or log-x bins based on data range.
+         # For simplicity: Use log-spaced bins if max wait > 0
+         
+         max_wait = combined['wait_time_hours'].max()
+         if max_wait and max_wait > 0:
+             # Create log bins
+             bins = np.logspace(np.log10(0.01), np.log10(max_wait), 50)
+             # Handle 0 wait times? replace 0 with small epsilon for log plotting
+             
+             # Histogram for A
+             waits_a = (df_a['wait_time_hours'].fillna(0) + 0.01).astype(float)
+             weights_a = df_a['requested_node_hours'].fillna(0).astype(float)
+             hist_a, _ = np.histogram(waits_a, bins=bins, weights=weights_a)
+             
+             # Histogram for B
+             waits_b = (df_b['wait_time_hours'].fillna(0) + 0.01).astype(float)
+             weights_b = df_b['requested_node_hours'].fillna(0).astype(float)
+             hist_b, _ = np.histogram(waits_b, bins=bins, weights=weights_b)
+             
+             # Centers for plotting
+             centers = (bins[:-1] + bins[1:]) / 2
+             
+             # Step plot
+             ax.plot(centers, hist_a, label='Period A', color='royalblue', linewidth=2)
+             ax.fill_between(centers, 0, hist_a, color='royalblue', alpha=0.3)
+             
+             ax.plot(centers, hist_b, label='Period B', color='darkorange', linewidth=2)
+             ax.fill_between(centers, 0, hist_b, color='darkorange', alpha=0.3)
+             
+             ax.set_xscale('log')
+             ax.set_xlabel('Wait Time (Hours) [Log Scale]')
+             ax.set_ylabel('Total Node-Hours (Weighted Count)')
+             ax.set_title('Wait Time Distribution (Weighted by Node-Hours)')
+             ax.legend()
+             
+             if save_dir:
+                pth = os.path.join(save_dir, 'wait_time_weighted_dist.png')
+                fig.savefig(pth, bbox_inches='tight', dpi=120)
+                outputs['wait_time_dist'] = pth
+             plt.close(fig)
+      except Exception as e:
+         self.logger.warning(f"Plot wait_time_weighted_dist failed: {e}")
+
+      return metrics, outputs
+
+   def _fetch_period_data(self, start: datetime, end: datetime) -> pd.DataFrame:
+       """Helper to fetch and process jobs for a specific period."""
+       with self.repo_factory.get_job_repository().get_session() as session:
+          # Query jobs started in range
+          jobs = session.query(Job).filter(
+             and_(
+                Job.start_time >= start,
+                Job.start_time <= end,
+                Job.nodes.isnot(None),
+                Job.walltime.isnot(None)
+             )
+          ).all()
+          
+          if not jobs:
+             return pd.DataFrame(columns=[
+                'job_id', 'queue', 'project', 'allocation_type', 
+                'state', 'requested_node_hours', 'wait_time_hours'
+             ])
+
+          records = []
+          for job in jobs:
+             try:
+                # Basic parsing
+                wall_h = self._parse_walltime_to_hours(job.walltime)
+                node_h = (job.nodes or 0) * wall_h
+                wait_h = self._compute_wait_hours(job.submit_time, job.start_time)
+                
+                records.append({
+                   'job_id': job.job_id,
+                   'queue': job.queue,
+                   'project': job.project,
+                   'allocation_type': getattr(job, 'allocation_type', 'unknown'),
+                   'state': str(job.state),
+                   'requested_node_hours': float(node_h),
+                   'wait_time_hours': float(wait_h)
+                })
+             except Exception:
+                continue
+                
+          return pd.DataFrame.from_records(records)
    def __init__(self, repository_factory: Optional[RepositoryFactory] = None, data_collector: Optional[DataCollector] = None):
       self.repo_factory = repository_factory or RepositoryFactory()
       self.data_collector = data_collector

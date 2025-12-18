@@ -62,6 +62,8 @@ class AnalyzeCommand(BaseCommand):
          return self._analyze_usage_insights(args)
       elif args.analyze_action == "leaderboard":
          return self._analyze_leaderboard(args)
+      elif args.analyze_action == "time-comparison":
+         return self._analyze_time_comparison(args)
       else:
           self.logger.error(f"Unknown analyze action: {args.analyze_action}")
           print("\nAvailable actions: run-score, walltime-efficiency-by-user, walltime-efficiency-by-project, reservation-utilization, reservation-trends, reservation-owner-ranking, usage-insights, leaderboard")
@@ -1328,4 +1330,71 @@ class AnalyzeCommand(BaseCommand):
                )
                self.console.print(projects_table)
          else:
-            self.console.print("[yellow]No project data available for the specified period.[/yellow]") 
+            self.console.print("[yellow]No project data available for the specified period.[/yellow]")
+
+   def _analyze_time_comparison(self, args: argparse.Namespace) -> int:
+      """Compare metrics between two time periods"""
+      try:
+         # Parse dates
+         import dateutil.parser
+         try:
+            a_lower = dateutil.parser.parse(args.a_lower)
+            a_upper = dateutil.parser.parse(args.a_upper)
+            b_lower = dateutil.parser.parse(args.b_lower)
+            b_upper = dateutil.parser.parse(args.b_upper)
+         except Exception as e:
+            self.console.print(f"[red]Error parsing dates: {e}. Please use ISO 8601 format (e.g. YYYY-MM-DDTHH:MM)[/red]")
+            return 1
+         
+         group_by = getattr(args, 'group_by', 'queue')
+         out_dir = getattr(args, 'output_dir', 'plots/comparison')
+         output_format = getattr(args, 'format', 'table')
+         
+         analyzer = UsageInsights()
+         self.console.print(f"[bold blue]Comparing Period A ({a_lower} to {a_upper}) vs Period B ({b_lower} to {b_upper})...[/bold blue]")
+         
+         metrics, plots = analyzer.compare_time_periods(
+            a_start=a_lower, a_end=a_upper,
+            b_start=b_lower, b_end=b_upper,
+            group_by=group_by,
+            save_dir=out_dir
+         )
+         
+         if not metrics:
+            self.console.print("[yellow]No data generated for comparison.[/yellow]")
+            return 0
+
+         # Display basic metrics table
+         if 'summary_table' in metrics:
+             df = metrics['summary_table']
+             self.console.print(f"\n[bold green]Comparison Summary Table ({group_by})[/bold green]")
+             if output_format == 'csv':
+                 self.console.print(df.to_csv(index=False))
+             else:
+                 # If it is already pivoted (Category, NodeHours_A, NodeHours_B, etc)
+                 headers = list(df.columns)
+                 # Format floats
+                 formatted_rows = []
+                 for _, row in df.iterrows():
+                    new_row = []
+                    for val in row:
+                       if isinstance(val, float):
+                          new_row.append(f"{val:.2f}")
+                       else:
+                          new_row.append(str(val))
+                    formatted_rows.append(new_row)
+                 
+                 table = self._create_table(title=f"Comparison: {group_by}", headers=headers, rows=formatted_rows)
+                 self.console.print(table)
+
+         if plots:
+            self.console.print(f"\n[bold green]Generated Plots in '{out_dir}':[/bold green]")
+            for name, path in plots.items():
+               self.console.print(f"  {name}: {path}")
+
+         return 0
+      except Exception as e:
+         self.logger.error(f"Error in time comparison: {str(e)}")
+         self.console.print(f"[red]Error: {str(e)}[/red]")
+         return 1
+ 

@@ -349,6 +349,34 @@ Examples:
       help="Analysis actions"
    )
    
+   # Analyze time-comparison
+   time_comp_parser = analyze_subparsers.add_parser(
+      "time-comparison",
+      help="Compare throughput and metrics between two time periods"
+   )
+   time_comp_parser.add_argument(
+      "--a-lower", required=True, help="Start of Period A (ISO 8601, e.g. YYYY-MM-DDTHH:MM)"
+   )
+   time_comp_parser.add_argument(
+      "--a-upper", required=True, help="End of Period A (ISO 8601)"
+   )
+   time_comp_parser.add_argument(
+      "--b-lower", required=True, help="Start of Period B (ISO 8601)"
+   )
+   time_comp_parser.add_argument(
+      "--b-upper", required=True, help="End of Period B (ISO 8601)"
+   )
+   time_comp_parser.add_argument(
+      "--group-by", choices=["queue", "project", "allocation_type"], default="queue",
+      help="Group by category (default: queue)"
+   )
+   time_comp_parser.add_argument(
+      "--output-dir", default="plots/comparison", help="Directory to save plots"
+   )
+   time_comp_parser.add_argument(
+       "--format", choices=["table", "csv"], default="table", help="Metrics output format"
+   )
+
    # Analyze run-now
    run_now_parser = analyze_subparsers.add_parser(
       "run-now",
