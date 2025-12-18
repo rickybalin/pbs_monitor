@@ -854,6 +854,47 @@ class UsageInsights:
                   fig.savefig(pth, bbox_inches='tight', dpi=dpi)
                   outputs['utilization_percent'] = pth
                plt.close(fig)
+
+            # ---- Grouped Utilization Plots ----
+            # 1) By Queue (excluding reservations)
+            if save_dir:
+               q_pth = os.path.join(save_dir, f'utilization_percent_by_queue_per_{ts_freq}.png')
+               saved_q = self._plot_grouped_utilization(
+                  df=df,
+                  group_col='queue',
+                  total_nodes=total_nodes,
+                  window_start=window_start,
+                  freq=ts_freq,
+                  palette=queue_palette,
+                  title=f'Utilization by Queue (% of capacity used per {ts_freq})',
+                  save_path=q_pth,
+                  dpi=dpi
+               )
+               if saved_q:
+                  outputs['utilization_percent_by_queue'] = saved_q
+
+            # 2) By Allocation Type (excluding reservations)
+            if save_dir:
+               try:
+                  alloc_types = sorted(df['allocation_type'].dropna().astype(str).unique().tolist())
+               except Exception:
+                  alloc_types = []
+               alloc_palette = self._build_allocation_palette(alloc_types)
+               
+               alloc_pth = os.path.join(save_dir, f'utilization_percent_by_allocation_type_per_{ts_freq}.png')
+               saved_alloc = self._plot_grouped_utilization(
+                  df=df.dropna(subset=['allocation_type']),
+                  group_col='allocation_type',
+                  total_nodes=total_nodes,
+                  window_start=window_start,
+                  freq=ts_freq,
+                  palette=alloc_palette,
+                  title=f'Utilization by Allocation Type (% of capacity used per {ts_freq})',
+                  save_path=alloc_pth,
+                  dpi=dpi
+               )
+               if saved_alloc:
+                  outputs['utilization_percent_by_allocation_type'] = saved_alloc
       except Exception as e:
          self.logger.debug(f"Plot utilization_percent failed: {e}")
 
@@ -1602,6 +1643,86 @@ class UsageInsights:
             .sort_values('timestamp')
       )
       return out
+
+   def _plot_grouped_utilization(
+      self,
+      df: pd.DataFrame,
+      group_col: str,
+      total_nodes: int,
+      window_start: pd.Timestamp,
+      freq: str,
+      palette: Dict[str, str],
+      title: str,
+      save_path: Optional[str] = None,
+      dpi: int = 120
+   ) -> Optional[str]:
+      """Helper to compute and plot grouped utilization."""
+      if df.empty:
+         return None
+      
+      # Compute used node-hours by group
+      if group_col == 'queue':
+         used_df = self._compute_used_node_hours_by_queue_timeseries(df, window_start, freq)
+      elif group_col == 'allocation_type':
+         used_df = self._compute_used_node_hours_by_allocation_timeseries(df, window_start, freq)
+      else:
+         return None
+
+      if used_df.empty:
+         return None
+      
+      # Build full timeline
+      now_ts = pd.Timestamp.now(tz=None)
+      start_bin = window_start.to_period(self._normalize_freq(freq)).to_timestamp()
+      end_bin = now_ts.to_period(self._normalize_freq(freq)).to_timestamp()
+      full_idx = pd.date_range(start=start_bin, end=end_bin, freq=self._normalize_freq(freq))
+      
+      # Pivot to matrix form: index=timestamp, columns=group
+      pivot = used_df.pivot_table(index='timestamp', columns=group_col, values='used_node_hours', aggfunc='sum').reindex(full_idx, fill_value=0.0).fillna(0.0)
+
+      # Determine capacity per bin for normalization
+      # Capacity = total_nodes * hours_in_bin
+      offset = pd.tseries.frequencies.to_offset(self._normalize_freq(freq))
+      cap_factors = []
+      for t in pivot.index:
+         candidate_next = t + offset
+         next_t = min(candidate_next, now_ts)
+         hours = max(0.0, (next_t - t).total_seconds() / 3600.0)
+         cap_factors.append(hours)
+      cap_factors_series = pd.Series(cap_factors, index=pivot.index)
+      capacity_node_hours = cap_factors_series.astype(float) * float(int(total_nodes))
+      
+      # Normalize to 0-100%
+      eps = 1e-9
+      pct_df = pivot.divide(capacity_node_hours.clip(lower=eps), axis=0) * 100.0
+      
+      # Plot
+      fig, ax = plt.subplots(figsize=(14, 6))
+      color_order = [palette.get(str(c)) for c in pct_df.columns]
+      pct_df.plot.area(ax=ax, color=color_order)
+      
+      ax.set_title(title)
+      ax.set_xlabel('')
+      ax.set_ylabel('Utilization (%)')
+      ax.set_ylim(0, 100)
+      
+      # Format x-axis
+      import matplotlib.dates as mdates
+      ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+      ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+      plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+      
+      # Add legend
+      ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title=group_col.replace('_', ' ').title(), frameon=False)
+      
+      fig.autofmt_xdate(rotation=45)
+      
+      saved_path = None
+      if save_path:
+         fig.savefig(save_path, bbox_inches='tight', dpi=dpi)
+         saved_path = save_path
+      plt.close(fig)
+      return saved_path
 
    def _compute_current_wait_bins(self, df: pd.DataFrame) -> pd.DataFrame:
       """
