@@ -824,12 +824,24 @@ class UsageInsights:
                eps = 1e-9
                utilization_pct = (used_series.astype(float) / capacity_node_hours.clip(lower=eps)) * 100.0
 
+               # Compute reservation utilization (excluded capacity)
+               res_df = self._compute_reserved_node_hours_timeseries(window_start, freq=ts_freq)
+               res_series = pd.Series(0.0, index=full_idx)
+               if not res_df.empty:
+                  res_series = res_df.set_index('timestamp')['reserved_node_hours'].reindex(full_idx, fill_value=0.0)
+               
+               reservation_pct = (res_series.astype(float) / capacity_node_hours.clip(lower=eps)) * 100.0
+
                fig, ax = plt.subplots(figsize=(14, 6))
-               ax.plot(utilization_pct.index, utilization_pct.values, label='Utilization')
+               ax.plot(utilization_pct.index, utilization_pct.values, label='Job Utilization')
+               ax.plot(reservation_pct.index, reservation_pct.values, label='Reserved (Excluded)', linestyle='--', color='salmon')
+               
                ax.set_title(f'Utilization over time (% of capacity used per {ts_freq})')
                ax.set_xlabel('')  # Remove x-axis title
                ax.set_ylabel('Utilization (%)')
                ax.set_ylim(0, 100)
+               ax.legend(loc='upper right')
+               
                # Format x-axis dates and rotate labels
                import matplotlib.dates as mdates
                ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
@@ -1504,6 +1516,87 @@ class UsageInsights:
       out = pd.DataFrame(rows, columns=['timestamp', 'allocation_type', 'used_node_hours'])
       out = (
          out.groupby(['timestamp', 'allocation_type'])['used_node_hours']
+            .sum()
+            .reset_index()
+            .sort_values('timestamp')
+      )
+      return out
+
+   def _compute_reserved_node_hours_timeseries(self, window_start: pd.Timestamp, freq: str = 'D') -> pd.DataFrame:
+      """
+      Aggregate reserved node-hours per period across all reservations.
+      Computes sum over reservations of nodes × overlap_hours between reservation [start,end) and each period [t, next_t).
+      Returns columns: ['timestamp', 'reserved_node_hours']
+      """
+      # Ensure Timestamp
+      window_start = pd.Timestamp(window_start)
+      
+      # Fetch reservations overlapping the window
+      with self.repo_factory.get_reservation_repository().get_session() as session:
+          # We need all reservations that might overlap with window_start onwards
+          # Overlap if: res.end_time > window_start
+          # Note: We rely on the repository to provide a reasonable subset or filter in memory
+          # Ideally, we would add a method to ReservationRepository to query by overlap, 
+          # but for now let's fetch historical ones and filter.
+          # Assuming historical_reservations(days=X) covers the window.
+          # Calculate days needed from window_start to now
+          days_needed = (datetime.now() - window_start).days + 2
+          reservations = self.repo_factory.get_reservation_repository().get_historical_reservations(days=days_needed)
+          
+      if not reservations:
+         return pd.DataFrame(columns=['timestamp', 'reserved_node_hours'])
+
+      rows: List[Tuple[pd.Timestamp, float]] = []
+      
+      # Use same timeline generation as other methods
+      norm_freq = self._normalize_freq(freq)
+      now = pd.Timestamp.now(tz=None)
+      
+      # We need to iterate over time bins covering the window
+      start_bin = window_start.to_period(norm_freq).to_timestamp()
+      end_bin = now.to_period(norm_freq).to_timestamp()
+      timeline = pd.date_range(start=start_bin, end=end_bin, freq=norm_freq)
+      if len(timeline) == 0:
+         timeline = pd.DatetimeIndex([start_bin])
+         
+      for t in timeline:
+         next_t_candidates = pd.date_range(start=t, periods=2, freq=norm_freq)
+         next_t = next_t_candidates[-1] if len(next_t_candidates) == 2 else (t + pd.Timedelta(hours=24))
+         
+         total_reserved_hours = 0.0
+         
+         for res in reservations:
+            try:
+               st = res.start_time
+               en = res.end_time
+               nodes = int(res.nodes or 0)
+               
+               if pd.isna(st) or pd.isna(en) or nodes <= 0:
+                  continue
+               
+               # Check overlap
+               st_ts = pd.Timestamp(st)
+               en_ts = pd.Timestamp(en)
+               
+               # overlap within [t, next_t)
+               seg_start = max(st_ts, t)
+               seg_end = min(en_ts, next_t)
+               
+               hours = max(0.0, (seg_end - seg_start).total_seconds() / 3600.0)
+               if hours > 0.0:
+                  total_reserved_hours += float(nodes) * float(hours)
+            except Exception:
+               continue
+               
+         if total_reserved_hours > 0.0:
+            rows.append((t, total_reserved_hours))
+
+      if not rows:
+         return pd.DataFrame(columns=['timestamp', 'reserved_node_hours'])
+         
+      out = pd.DataFrame(rows, columns=['timestamp', 'reserved_node_hours'])
+      out = (
+         out.groupby(['timestamp'])['reserved_node_hours']
             .sum()
             .reset_index()
             .sort_values('timestamp')
