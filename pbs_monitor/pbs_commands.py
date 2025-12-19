@@ -120,22 +120,19 @@ class PBSCommands:
       Returns:
          Cleaned JSON output
       """
-      # Remove or replace invalid control characters that break JSON parsing
-      # This includes characters like \x00-\x1f except for \t, \n, \r which are valid in JSON
-      import string
-      
-      # Define valid control characters for JSON
-      valid_controls = {'\t', '\n', '\r'}
-      
-      # Replace invalid control characters with spaces
-      cleaned_output = ""
-      for char in output:
-         if char in string.whitespace or ord(char) >= 32 or char in valid_controls:
-            cleaned_output += char
-         else:
-            # Replace invalid control characters with space
-            cleaned_output += " "
-      
+      if not output:
+         return ""
+
+      # Optimized control character cleaning using regex
+      # Remove control characters (0-31) except tab (9), newline (10), carriage return (13)
+      # Regex to match invalid control characters: 0x00-0x1f excluding \t \n \r
+      cleaned_output = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', output)
+
+      # Fix specific qstat output issue where caret-escaped quotes appear unescaped
+      # Example: %{^"^...} -> %{^\"^...}
+      # This handles the specific crash case where qstat emits unescaped quotes preceded by caret
+      cleaned_output = cleaned_output.replace('^"', '^\\"')
+
       # Fix unquoted large numeric values that start with 0
       # Pattern: "field_name":0000000000000000000000000000000000000000,
       pattern = r'"([^"]+)":([0-9]{30,}),'
@@ -148,9 +145,9 @@ class PBSCommands:
       
       cleaned_output = re.sub(pattern, fix_numeric_value, cleaned_output)
       
-      # Log if any fixes were applied
-      if cleaned_output != output:
-         self.logger.debug(f"Applied JSON preprocessing fixes for control characters and malformed numeric values")
+      # Log if any fixes were applied (simple length check or exact match)
+      if len(cleaned_output) != len(output) or cleaned_output != output:
+         self.logger.debug(f"Applied JSON preprocessing fixes")
       
       return cleaned_output
    

@@ -388,6 +388,11 @@ class PBSReservation:
             return None
         
         try:
+            # Handle "Mon Jan 05 2026 0" format (where '0' means '00:00')
+            if datetime_str.endswith(" 0"):
+                # Replace the trailing " 0" with " 00:00" and try parsing again
+                datetime_str = datetime_str[:-2] + " 00:00"
+
             # Handle "Today HH:MM" format
             if datetime_str.startswith("Today "):
                 time_part = datetime_str.replace("Today ", "")
