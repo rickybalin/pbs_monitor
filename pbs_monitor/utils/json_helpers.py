@@ -42,6 +42,11 @@ def load_json_safe(
     try:
         return json.loads(json_str)
     except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON at line {e.lineno}, column {e.colno}")
+        ln = e.lineno
+        cn = e.colno
+        logger.error("content before: \n",original[cn-100:cn+100])
+        logger.error("\ncontent after: \n",jsonstr[cn-100:cn+100])
         # Determine output directory
         if output_dir is None:
             try:

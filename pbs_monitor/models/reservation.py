@@ -413,11 +413,22 @@ class PBSReservation:
                 return datetime.combine(today, time_obj)
             
             # Handle full format "Mon Jul 28 16:00"
-            elif len(datetime_str.split()) >= 4:
+            elif len(datetime_str.split()) == 4:
                 # Add current year if not present
                 if not any(part.isdigit() and len(part) == 4 for part in datetime_str.split()):
                     datetime_str += f" {datetime.now().year}"
                 return datetime.strptime(datetime_str, "%a %b %d %H:%M %Y")
+            
+            # Handle "Fri Jan 09 2026 00:00" format
+            elif len(datetime_str.split()) == 5:
+                try:
+                    return datetime.strptime(datetime_str, "%a %b %d %Y %H:%M")
+                except:
+                    try:
+                        return datetime.strptime(datetime_str, "%a %b %d %H:%M %Y")
+                    except:
+                        raise
+
             
         except ValueError as e:
             logging.getLogger(__name__).warning(f"Could not parse summary datetime '{datetime_str}': {e}")

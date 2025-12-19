@@ -132,7 +132,10 @@ class PBSCommands:
 
       # Fix array jobs output that include output paths like this: 
       # "output": "/home/parton/pbs_monitor/tests/verify_array_index_filtering.py^array_index^"
-      cleaned_output = cleaned_output.replace("^array_index^", "")
+      cleaned_output = cleaned_output.replace("^array_index^\\", "")
+
+      # Replace unescaped quotes within the PS1 value
+      cleaned_output = cleaned_output.replace('%1{^"^Þ^Ü%}', '%1{^\\"^Þ^Ü%}')
 
       # Fix unquoted large numeric values that start with 0
       # Pattern: "field_name":0000000000000000000000000000000000000000,
