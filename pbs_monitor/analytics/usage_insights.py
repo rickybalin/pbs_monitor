@@ -690,18 +690,26 @@ class UsageInsights:
       try:
          bl_df = self._compute_backlog_timeseries(df, window_start, freq=ts_freq)
          self.logger.debug(f"Backlog timeseries: {bl_df}")
+         self.logger.info(f"queues included in backlog timeseries: {bl_df['queue'].unique()}")
          if not bl_df.empty:
             pivot = bl_df.pivot_table(index='timestamp', columns='queue', values='machine_hours', aggfunc='sum').fillna(0.0)
+            # Build full timeline to include zero-usage bins
+            now_ts = pd.Timestamp.now(tz=None)
+            start_bin = window_start.to_period(self._normalize_freq(ts_freq)).to_timestamp()
+            end_bin = now_ts.to_period(self._normalize_freq(ts_freq)).to_timestamp()
+            full_idx = pd.date_range(start=start_bin, end=end_bin, freq=self._normalize_freq(ts_freq))
+            pivot = pivot.reindex(full_idx, fill_value=0.0)
+
             fig, ax = plt.subplots(figsize=(14, 6))
             color_order = [queue_palette.get(str(c)) for c in pivot.columns]
-            pivot.plot.area(ax=ax, color=color_order)
+            ax.stackplot(pivot.index, *(pivot[c] for c in pivot.columns), labels=pivot.columns, colors=color_order, linewidth=0)
             ax.set_title(f'Queue depth over time (machine-hours queued per {ts_freq})')
             ax.set_xlabel('')  # Remove x-axis title
             ax.set_ylabel('Machine-hours queued')
             # Format x-axis dates - be more explicit to override pandas defaults
             import matplotlib.dates as mdates
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-            ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(pivot.index) // 10)))
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
             plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
             # Force the formatter to be applied
             fig.autofmt_xdate(rotation=45)
@@ -720,15 +728,31 @@ class UsageInsights:
          self.logger.debug(f"Backlog timeseries by allocation: {bl_df_alloc}")
          if not bl_df_alloc.empty:
             pivot = bl_df_alloc.pivot_table(index='timestamp', columns='allocation_type', values='machine_hours', aggfunc='sum').fillna(0.0)
+            # Build full timeline to include zero-usage bins
+            now_ts = pd.Timestamp.now(tz=None)
+            start_bin = window_start.to_period(self._normalize_freq(ts_freq)).to_timestamp()
+            end_bin = now_ts.to_period(self._normalize_freq(ts_freq)).to_timestamp()
+            full_idx = pd.date_range(start=start_bin, end=end_bin, freq=self._normalize_freq(ts_freq))
+            pivot = pivot.reindex(full_idx, fill_value=0.0)
+
             fig, ax = plt.subplots(figsize=(14, 6))
             # Build consistent palette for allocation types
             alloc_types = sorted(pivot.columns.astype(str).tolist())
             alloc_palette = self._build_allocation_palette(alloc_types)
             color_order = [alloc_palette.get(str(c)) for c in pivot.columns]
-            pivot.plot.area(ax=ax, color=color_order)
+            ax.stackplot(pivot.index, *(pivot[c] for c in pivot.columns), labels=pivot.columns, colors=color_order, linewidth=0)
             ax.set_title(f'Queue depth over time by allocation type (machine-hours queued per {ts_freq})')
             ax.set_xlabel('')  # Remove x-axis title
             ax.set_ylabel('Machine-hours queued')
+            
+            # Format x-axis dates - be more explicit to override pandas defaults
+            import matplotlib.dates as mdates
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+            # Force the formatter to be applied
+            fig.autofmt_xdate(rotation=45)
+
             ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Allocation Type', frameon=False)
             if save_dir:
                pth = os.path.join(save_dir, f'queue_depth_machine_hours_by_allocation_per_{ts_freq}.png')
