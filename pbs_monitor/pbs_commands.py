@@ -14,6 +14,7 @@ from .models.job import PBSJob
 from .models.queue import PBSQueue
 from .models.node import PBSNode
 from .models.reservation import PBSReservation, ReservationState
+from .utils.json_helpers import load_json_safe
 
 
 class PBSCommandError(Exception):
@@ -172,7 +173,7 @@ class PBSCommands:
       try:
          # Preprocess the JSON to fix common formatting issues
          cleaned_output = self._preprocess_json(output)
-         return json.loads(cleaned_output)
+         return load_json_safe(cleaned_output, command_description)
       except json.JSONDecodeError as e:
          # Log the raw output for debugging
          self.logger.error(f"JSON parsing failed for {command_description}")

@@ -19,6 +19,7 @@ from ..models.job import PBSJob, JobState
 from ..models.queue import PBSQueue
 from ..models.node import PBSNode, NodeState
 from ..models.reservation import PBSReservation, ReservationState
+from ..utils.json_helpers import load_json_safe
 from ..database.migrations import (
     initialize_database, migrate_database, validate_database,
     backup_database, restore_database, clean_old_data, get_database_info
@@ -2014,7 +2015,7 @@ class DaemonCommand(BaseCommand):
          
          # Try to parse as JSON first
          try:
-            daemon_info = json.loads(content)
+            daemon_info = load_json_safe(content, f"daemon_info_pid_{pid_file}")
             # Check if it's a dictionary with required fields
             if isinstance(daemon_info, dict) and 'hostname' in daemon_info and 'pid' in daemon_info:
                return daemon_info
