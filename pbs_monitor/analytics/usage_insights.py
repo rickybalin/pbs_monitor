@@ -1700,7 +1700,7 @@ class UsageInsights:
       # Plot
       fig, ax = plt.subplots(figsize=(14, 6))
       color_order = [palette.get(str(c)) for c in pct_df.columns]
-      pct_df.plot.area(ax=ax, color=color_order)
+      ax.stackplot(pct_df.index, *(pct_df[c] for c in pct_df.columns), labels=pct_df.columns, colors=color_order)
       
       ax.set_title(title)
       ax.set_xlabel('')
