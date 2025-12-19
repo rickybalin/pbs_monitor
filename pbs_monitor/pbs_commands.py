@@ -124,9 +124,10 @@ class PBSCommands:
          return ""
 
       # Optimized control character cleaning using regex
-      # Remove control characters (0-31) except tab (9), newline (10), carriage return (13)
-      # Regex to match invalid control characters: 0x00-0x1f excluding \t \n \r
-      cleaned_output = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', output)
+      # Remove ALL control characters (0-31) including tab (9), newline (10), carriage return (13)
+      # because qstat is outputting them literally inside strings, which is invalid JSON.
+      # We replace them with spaces to preserve valid JSON structure.
+      cleaned_output = re.sub(r'[\x00-\x1f]', ' ', output)
 
       # Fix specific qstat output issue where caret-escaped quotes appear unescaped
       # Example: %{^"^...} -> %{^\"^...}
