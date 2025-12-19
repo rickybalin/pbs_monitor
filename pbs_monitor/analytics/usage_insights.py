@@ -44,6 +44,7 @@ from ..database.models import Job, JobHistory, JobState
 from ..data_collector import DataCollector
 from ..models.job import PBSJob, JobState as PBSJobState
 from ..pbs_commands import PBSCommands
+from ..utils.json_helpers import load_json_safe
 import matplotlib.ticker as mticker
 
 
@@ -1817,8 +1818,8 @@ class UsageInsights:
          )
          
          if result.returncode == 0:
-            import json
-            node_data = json.loads(result.stdout)
+            # import json
+            node_data = load_json_safe(result.stdout, "usage_insights_pbsnodes")
             total_nodes = len(node_data.get('nodes', {}))
             
             if total_nodes > 0:
