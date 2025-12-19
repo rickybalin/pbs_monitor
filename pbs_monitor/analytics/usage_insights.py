@@ -135,6 +135,34 @@ class UsageInsights:
 
       # Reset index to make group_by a column
       metrics['summary_table'] = summary_pivot.reset_index()
+
+      # 4. Top Users & Projects Analysis
+      
+      def get_top_entities(df, group_cols, value_col='requested_node_hours', top_n=10):
+         if df.empty:
+            return pd.DataFrame()
+         return (df.groupby(group_cols)[value_col]
+                  .sum()
+                  .reset_index()
+                  .sort_values(value_col, ascending=False)
+                  .head(top_n))
+
+      # Top Users (Overall)
+      metrics['top_users_A'] = get_top_entities(df_a, ['owner'])
+      metrics['top_users_B'] = get_top_entities(df_b, ['owner'])
+      
+      # Top Projects (Overall)
+      metrics['top_projects_A'] = get_top_entities(df_a, ['project'])
+      metrics['top_projects_B'] = get_top_entities(df_b, ['project'])
+      
+      # Top Users by Queue
+      metrics['top_users_by_queue_A'] = get_top_entities(df_a, ['queue', 'owner'])
+      metrics['top_users_by_queue_B'] = get_top_entities(df_b, ['queue', 'owner'])
+      
+      # Top Projects by Queue
+      metrics['top_projects_by_queue_A'] = get_top_entities(df_a, ['queue', 'project'])
+      metrics['top_projects_by_queue_B'] = get_top_entities(df_b, ['queue', 'project'])
+
       
       # --- PLOTTING ---
       if plt is None or sns is None:
@@ -261,6 +289,7 @@ class UsageInsights:
                 
                 records.append({
                    'job_id': job.job_id,
+                   'owner': job.owner,
                    'queue': job.queue,
                    'project': job.project,
                    'allocation_type': getattr(job, 'allocation_type', 'unknown'),

@@ -1387,6 +1387,11 @@ class AnalyzeCommand(BaseCommand):
                  table = self._create_table(title=f"Comparison: {group_by}", headers=headers, rows=formatted_rows)
                  self.console.print(table)
 
+         # Display Top Users/Projects
+         self._display_comparison_top_entities(metrics, output_format, out_dir)
+
+
+
          if plots:
             self.console.print(f"\n[bold green]Generated Plots in '{out_dir}':[/bold green]")
             for name, path in plots.items():
@@ -1397,4 +1402,56 @@ class AnalyzeCommand(BaseCommand):
          self.logger.error(f"Error in time comparison: {str(e)}")
          self.console.print(f"[red]Error: {str(e)}[/red]")
          return 1
+   
+   def _display_comparison_top_entities(self, metrics: Dict[str, pd.DataFrame], output_format: str, out_dir: str) -> None:
+      """Display and save top users/projects from comparison metrics"""
+      
+      # Mapping of metric keys to display titles and filenames
+      items = [
+         ('top_users_A', 'Top Users (Period A)', 'top_users_A.csv'),
+         ('top_users_B', 'Top Users (Period B)', 'top_users_B.csv'),
+         ('top_projects_A', 'Top Projects (Period A)', 'top_projects_A.csv'),
+         ('top_projects_B', 'Top Projects (Period B)', 'top_projects_B.csv'),
+         ('top_users_by_queue_A', 'Top Users by Queue (Period A)', 'top_users_by_queue_A.csv'),
+         ('top_users_by_queue_B', 'Top Users by Queue (Period B)', 'top_users_by_queue_B.csv'),
+         ('top_projects_by_queue_A', 'Top Projects by Queue (Period A)', 'top_projects_by_queue_A.csv'),
+         ('top_projects_by_queue_B', 'Top Projects by Queue (Period B)', 'top_projects_by_queue_B.csv'),
+      ]
+      
+      import os
+      if out_dir:
+         os.makedirs(out_dir, exist_ok=True)
+      
+      for key, title, filename in items:
+         if key not in metrics or metrics[key].empty:
+            continue
+            
+         df = metrics[key]
+         
+         # Save to CSV if out_dir is specified
+         if out_dir:
+            try:
+               path = os.path.join(out_dir, filename)
+               df.to_csv(path, index=False)
+               self.console.print(f"Saved {title} to {path}")
+            except Exception as e:
+               self.logger.warning(f"Failed to save {filename}: {e}")
+         
+         # Display table
+         if output_format != 'csv': # Don't flood stdout if user asked for CSV format for the main command
+            
+            # Format floats
+            formatted_rows = []
+            headers = list(df.columns)
+            for _, row in df.iterrows():
+               new_row = []
+               for val in row:
+                  if isinstance(val, float):
+                     new_row.append(f"{val:.2f}")
+                  else:
+                     new_row.append(str(val))
+               formatted_rows.append(new_row)
+               
+            table = self._create_table(title=title, headers=headers, rows=formatted_rows)
+            self.console.print(table)
  
