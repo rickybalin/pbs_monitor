@@ -130,10 +130,9 @@ class PBSCommands:
       # We replace them with spaces to preserve valid JSON structure.
       cleaned_output = re.sub(r'[\x00-\x1f]', ' ', output)
 
-      # Fix specific qstat output issue where caret-escaped quotes appear unescaped
-      # Example: %{^"^...} -> %{^\"^...}
-      # This handles the specific crash case where qstat emits unescaped quotes preceded by caret
-      cleaned_output = cleaned_output.replace('^"', '^\\"')
+      # Fix array jobs output that include output paths like this: 
+      # "output": "/home/parton/pbs_monitor/tests/verify_array_index_filtering.py^array_index^"
+      cleaned_output = cleaned_output.replace("^array_index^", "")
 
       # Fix unquoted large numeric values that start with 0
       # Pattern: "field_name":0000000000000000000000000000000000000000,
