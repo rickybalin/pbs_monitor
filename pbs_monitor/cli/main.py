@@ -11,7 +11,7 @@ from typing import List, Optional
 from ..config import Config
 from ..utils.logging_setup import setup_logging
 from ..data_collector import DataCollector
-from .commands import StatusCommand, JobsCommand, NodesCommand, QueuesCommand, DatabaseCommand, HistoryCommand, DaemonCommand, ReservationsCommand
+from .commands import StatusCommand, JobsCommand, NodesCommand, QueuesCommand, DatabaseCommand, HistoryCommand, DaemonCommand, ReservationsCommand, ScoreFormulaCommand
 from .analyze_commands import AnalyzeCommand
 
 
@@ -695,7 +695,28 @@ Examples:
       default="table",
       help="Output format (default: table)"
    )
-   
+
+   # Score formula command
+   score_formula_parser = subparsers.add_parser(
+      "score-formula",
+      help="Display and explain the PBS job sort formula"
+   )
+   score_formula_parser.add_argument(
+      "--raw",
+      action="store_true",
+      help="Show only the raw formula string"
+   )
+   score_formula_parser.add_argument(
+      "--no-defaults",
+      action="store_true",
+      help="Hide the parameters table with default values"
+   )
+   score_formula_parser.add_argument(
+      "-r", "--refresh",
+      action="store_true",
+      help="Force refresh of server data"
+   )
+
    # Config command
    config_parser = subparsers.add_parser(
       "config",
@@ -1034,7 +1055,11 @@ def main(argv: Optional[List[str]] = None) -> int:
       elif args.command in ["resv", "reservations", "reserv"]:
          cmd = ReservationsCommand(collector, config)
          return cmd.execute(args)
-      
+
+      elif args.command == "score-formula":
+         cmd = ScoreFormulaCommand(collector, config)
+         return cmd.execute(args)
+
       else:
          print(f"Unknown command: {args.command}", file=sys.stderr)
          return 1

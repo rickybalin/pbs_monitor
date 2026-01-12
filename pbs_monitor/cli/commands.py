@@ -2960,3 +2960,156 @@ class ReservationsCommand(BaseCommand):
          reservation_data.append(data)
       
       print(yaml.dump(reservation_data, default_flow_style=False))
+
+
+class ScoreFormulaCommand(BaseCommand):
+   """Display and explain the PBS job sort formula"""
+
+   # Static documentation for formula variables
+   VARIABLE_DOCS = {
+      "base_score": ("Base priority score for the job", "server"),
+      "score_boost": ("Additional priority boost", "server"),
+      "enable_wfp": ("Enable Wait-time Factor Priority (0=off, 1=on)", "server"),
+      "wfp_factor": ("Multiplier for WFP calculation", "server"),
+      "enable_backfill": ("Enable backfill scheduling (0=off, 1=on)", "server"),
+      "backfill_max": ("Maximum backfill bonus value", "server"),
+      "backfill_factor": ("Divisor for backfill time calculation (seconds)", "server"),
+      "enable_fifo": ("Enable FIFO ordering (0=off, 1=on)", "server"),
+      "fifo_factor": ("Divisor for FIFO time calculation (seconds)", "server"),
+      "project_priority": ("Project-level priority multiplier", "job"),
+      "nodect": ("Number of nodes requested by the job", "job"),
+      "total_cpus": ("Total CPUs available in the cluster", "server"),
+      "walltime": ("Requested walltime in seconds", "job"),
+      "eligible_time": ("Time since job became eligible to run (seconds)", "job"),
+   }
+
+   def execute(self, args: argparse.Namespace) -> int:
+      """Execute the score-formula command"""
+      try:
+         # Get server data
+         server_data = self.collector.pbs_commands.qstat_server()
+
+         # Extract formula
+         formula = self.collector.pbs_commands.get_job_sort_formula(server_data=server_data)
+
+         if not formula:
+            print("Error: No job sort formula available from PBS server")
+            return 1
+
+         # Get server defaults
+         server_defaults = {}
+         server_info = server_data.get("Server", {})
+         for server_name, server_details in server_info.items():
+            server_defaults = server_details.get("resources_default", {})
+            break
+
+         # Handle --raw option
+         if getattr(args, 'raw', False):
+            print(formula)
+            return 0
+
+         # Display formatted output
+         self._display_formula(formula, server_defaults, args)
+
+         return 0
+
+      except Exception as e:
+         self.logger.error(f"Score formula command failed: {e}")
+         print(f"Error: {e}")
+         return 1
+
+   def _display_formula(self, formula: str, server_defaults: Dict[str, Any], args: argparse.Namespace):
+      """Display the formula and parameters in a formatted way"""
+
+      # Header
+      self.console.print()
+      self.console.print("[bold cyan]PBS Job Sort Formula[/bold cyan]")
+      self.console.print("=" * 60)
+      self.console.print()
+
+      # Raw formula
+      self.console.print("[bold]Formula:[/bold]")
+      self.console.print(f"  [green]{formula}[/green]")
+      self.console.print()
+
+      # Formula breakdown
+      self._display_formula_breakdown(formula)
+
+      # Parameters table (unless --no-defaults is specified)
+      if not getattr(args, 'no_defaults', False):
+         self._display_parameters_table(server_defaults)
+
+   def _display_formula_breakdown(self, formula: str):
+      """Display a breakdown of the formula components"""
+
+      self.console.print("[bold]Formula Components:[/bold]")
+      self.console.print()
+
+      # Parse and identify the main components
+      # The formula typically has these parts:
+      # 1. Base: base_score + score_boost
+      # 2. WFP: (enable_wfp * wfp_factor * (...))
+      # 3. Backfill: (enable_backfill * min(backfill_max, ...))
+      # 4. FIFO: (enable_fifo * eligible_time / fifo_factor)
+
+      components = [
+         ("1. Base Score", "base_score + score_boost",
+          "Static priority values assigned to the job"),
+         ("2. Wait-time Factor Priority (WFP)",
+          "enable_wfp * wfp_factor * (eligible_time^2 / walltime^3 * project_priority * nodect / total_cpus)",
+          "Rewards longer wait times, scaled by job size and project priority"),
+         ("3. Backfill Bonus",
+          "enable_backfill * min(backfill_max, eligible_time / backfill_factor)",
+          "Bonus for jobs that can backfill into gaps"),
+         ("4. FIFO Bonus",
+          "enable_fifo * eligible_time / fifo_factor",
+          "Simple time-in-queue priority boost"),
+      ]
+
+      for name, expr, description in components:
+         self.console.print(f"  [bold yellow]{name}[/bold yellow]")
+         self.console.print(f"    [dim]Expression:[/dim] [cyan]{expr}[/cyan]")
+         self.console.print(f"    [dim]Purpose:[/dim] {description}")
+         self.console.print()
+
+   def _display_parameters_table(self, server_defaults: Dict[str, Any]):
+      """Display a table of all parameters with their descriptions and defaults"""
+
+      self.console.print("[bold]Parameters and Current Defaults:[/bold]")
+      self.console.print()
+
+      # Build rows for the table
+      rows = []
+      for var_name, (description, source) in self.VARIABLE_DOCS.items():
+         # Get default value from server if available
+         if var_name in server_defaults:
+            default_value = str(server_defaults[var_name])
+         elif var_name == "project_priority":
+            default_value = "1"
+         elif var_name == "nodect":
+            default_value = "1"
+         elif var_name == "walltime":
+            default_value = "01:00:00 (3600s)"
+         elif var_name == "eligible_time":
+            default_value = "(dynamic)"
+         else:
+            default_value = "-"
+
+         rows.append([var_name, description, default_value, source])
+
+      # Create and display the table
+      table = self._create_table(
+         title="Formula Variables",
+         headers=["Variable", "Description", "Default", "Source"],
+         rows=rows
+      )
+
+      self.console.print(table)
+      self.console.print()
+
+      # Add notes
+      self.console.print("[dim]Notes:[/dim]")
+      self.console.print("[dim]  - Source 'server' = value from PBS server resources_default[/dim]")
+      self.console.print("[dim]  - Source 'job' = value from job's Resource_List or computed at runtime[/dim]")
+      self.console.print("[dim]  - Jobs can override server defaults via resource requests[/dim]")
+
