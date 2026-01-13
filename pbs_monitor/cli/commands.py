@@ -3831,7 +3831,7 @@ class ScoreFormulaCommand(BaseCommand):
 
                # Calculate components
                components = self._calculate_score_components(
-                  time_seconds, nodect, walltime_seconds, defaults, server_defaults
+                  time_seconds, nodect, walltime_seconds, defaults, server_defaults, formula
                )
                all_scores[(row_idx, col_idx)] = components
 
@@ -4027,8 +4027,8 @@ class ScoreFormulaCommand(BaseCommand):
 
    def _calculate_score_components(self, time_seconds, nodect: int,
                                     walltime_seconds: float, queue_defaults: Dict[str, Any],
-                                    server_defaults: Dict[str, Any]) -> Dict[str, Any]:
-      """Calculate individual score components over time
+                                    server_defaults: Dict[str, Any], formula: str) -> Dict[str, Any]:
+      """Calculate individual score components over time by evaluating the actual PBS formula.
 
       Args:
          time_seconds: numpy array of time values in seconds
@@ -4036,6 +4036,7 @@ class ScoreFormulaCommand(BaseCommand):
          walltime_seconds: Walltime in seconds
          queue_defaults: Queue-specific default values
          server_defaults: Server-wide default values
+         formula: The PBS job_sort_formula string from the server
 
       Returns:
          Dict with numpy arrays for each component: base, wfp, backfill, fifo
@@ -4045,38 +4046,77 @@ class ScoreFormulaCommand(BaseCommand):
       # Merge queue defaults with server defaults (queue takes precedence)
       defaults = {**server_defaults, **queue_defaults}
 
-      # Extract parameters
-      base_score = int(defaults.get('base_score', 0))
-      score_boost = int(defaults.get('score_boost', 0))
-      enable_wfp = int(defaults.get('enable_wfp', 0))
-      wfp_factor = int(defaults.get('wfp_factor', 100000))
-      enable_backfill = int(defaults.get('enable_backfill', 0))
-      backfill_max = int(defaults.get('backfill_max', 50))
-      backfill_factor = int(defaults.get('backfill_factor', 84600))
-      enable_fifo = int(defaults.get('enable_fifo', 1))
-      fifo_factor = int(defaults.get('fifo_factor', 1800))
-      total_cpus = int(defaults.get('total_cpus', 10624))
-      project_priority = 1  # Default project priority
+      # Split formula into individual terms
+      terms = self._split_formula_terms(formula)
 
-      # Calculate each component
-      base_values = np.full_like(time_seconds, float(base_score + score_boost))
+      # Classify each term
+      classified_terms = {}
+      for term in terms:
+         component = self._classify_term(term)
+         if component:
+            classified_terms[component] = term
 
+      # Build base variables dict (without eligible_time, which varies)
+      base_variables = {
+         "base_score": int(defaults.get("base_score", 0)),
+         "score_boost": int(defaults.get("score_boost", 0)),
+         "enable_wfp": int(defaults.get("enable_wfp", 0)),
+         "wfp_factor": int(defaults.get("wfp_factor", 100000)),
+         "enable_backfill": int(defaults.get("enable_backfill", 0)),
+         "backfill_max": int(defaults.get("backfill_max", 50)),
+         "backfill_factor": int(defaults.get("backfill_factor", 84600)),
+         "enable_fifo": int(defaults.get("enable_fifo", 1)),
+         "fifo_factor": int(defaults.get("fifo_factor", 1800)),
+         "total_cpus": int(defaults.get("total_cpus", 10624)),
+         "project_priority": 1,  # Default project priority
+         "nodect": nodect,
+         "walltime": walltime_seconds,
+         "min": min,
+         "max": max,
+      }
+
+      # Initialize result arrays
+      base_values = np.zeros_like(time_seconds)
       wfp_values = np.zeros_like(time_seconds)
       backfill_values = np.zeros_like(time_seconds)
       fifo_values = np.zeros_like(time_seconds)
 
+      # Evaluate each term for each time point
       for i, t in enumerate(time_seconds):
-         # WFP component
-         if enable_wfp and walltime_seconds > 0 and total_cpus > 0:
-            wfp_values[i] = enable_wfp * wfp_factor * (t**2 / walltime_seconds**3 * project_priority * nodect / total_cpus)
+         variables = {**base_variables, "eligible_time": t}
 
-         # Backfill component
-         if enable_backfill and backfill_factor > 0:
-            backfill_values[i] = enable_backfill * min(backfill_max, t / backfill_factor)
+         # Evaluate base terms (base_score and score_boost)
+         if 'base' in classified_terms:
+            try:
+               base_values[i] += float(eval(classified_terms['base'], {"__builtins__": {}}, variables))
+            except Exception:
+               pass
+         if 'boost' in classified_terms:
+            try:
+               base_values[i] += float(eval(classified_terms['boost'], {"__builtins__": {}}, variables))
+            except Exception:
+               pass
 
-         # FIFO component
-         if enable_fifo and fifo_factor > 0:
-            fifo_values[i] = enable_fifo * t / fifo_factor
+         # Evaluate WFP term
+         if 'wfp' in classified_terms:
+            try:
+               wfp_values[i] = float(eval(classified_terms['wfp'], {"__builtins__": {}}, variables))
+            except Exception:
+               pass
+
+         # Evaluate backfill term
+         if 'backfill' in classified_terms:
+            try:
+               backfill_values[i] = float(eval(classified_terms['backfill'], {"__builtins__": {}}, variables))
+            except Exception:
+               pass
+
+         # Evaluate FIFO term
+         if 'fifo' in classified_terms:
+            try:
+               fifo_values[i] = float(eval(classified_terms['fifo'], {"__builtins__": {}}, variables))
+            except Exception:
+               pass
 
       return {
          'base': base_values,
@@ -4084,4 +4124,66 @@ class ScoreFormulaCommand(BaseCommand):
          'backfill': backfill_values,
          'fifo': fifo_values
       }
+
+   def _split_formula_terms(self, formula: str) -> List[str]:
+      """Split formula into top-level additive terms.
+
+      Splits on '+' only when not inside parentheses, giving each
+      top-level term as a string that can be eval()'d independently.
+      """
+      terms = []
+      current: List[str] = []
+      depth = 0
+
+      for char in formula:
+         if char == '(':
+            depth += 1
+            current.append(char)
+         elif char == ')':
+            depth -= 1
+            current.append(char)
+         elif char == '+' and depth == 0:
+            term = ''.join(current).strip()
+            if term:
+               terms.append(term)
+            current = []
+         else:
+            current.append(char)
+
+      # Don't forget the last term
+      if current:
+         term = ''.join(current).strip()
+         if term:
+            terms.append(term)
+
+      return terms
+
+   def _classify_term(self, term: str) -> Optional[str]:
+      """Classify a formula term into its component type.
+
+      Returns one of: 'base', 'boost', 'wfp', 'backfill', 'fifo', or None if unrecognized.
+      """
+      term_lower = term.lower().strip()
+
+      # Check for specific variable names that identify each component
+      if term_lower == 'base_score' or 'base_score' in term_lower and 'enable' not in term_lower:
+         # Simple base_score reference
+         if 'enable' not in term_lower and 'factor' not in term_lower:
+            return 'base'
+      if term_lower == 'score_boost':
+         return 'boost'
+      if 'enable_wfp' in term_lower:
+         return 'wfp'
+      if 'enable_backfill' in term_lower:
+         return 'backfill'
+      if 'enable_fifo' in term_lower:
+         return 'fifo'
+
+      # Fallback: check if it's just a simple variable reference
+      if term.strip() == 'base_score':
+         return 'base'
+      if term.strip() == 'score_boost':
+         return 'boost'
+
+      return None
 
