@@ -3008,8 +3008,30 @@ class ScoreFormulaCommand(BaseCommand):
             print(formula)
             return 0
 
+         # Handle --plot-grid option
+         if getattr(args, 'plot_grid', False):
+            return self._generate_grid_plot(args, formula, server_defaults)
+
+         # Handle --plot option
+         if getattr(args, 'plot', False):
+            return self._generate_plots(args, formula, server_defaults)
+
+         # Fetch jobs if --job-ids provided (for display without --plot)
+         jobs = []
+         job_ids = getattr(args, 'job_ids', None)
+         if job_ids:
+            for job_id in job_ids:
+               try:
+                  job = self.collector.get_job_by_id(job_id)
+                  if job:
+                     jobs.append(job)
+                  else:
+                     self.logger.warning(f"Job {job_id} not found")
+               except Exception as e:
+                  self.logger.warning(f"Failed to get job {job_id}: {e}")
+
          # Display formatted output
-         self._display_formula(formula, server_defaults, args)
+         self._display_formula(formula, server_defaults, args, jobs)
 
          return 0
 
@@ -3018,7 +3040,7 @@ class ScoreFormulaCommand(BaseCommand):
          print(f"Error: {e}")
          return 1
 
-   def _display_formula(self, formula: str, server_defaults: Dict[str, Any], args: argparse.Namespace):
+   def _display_formula(self, formula: str, server_defaults: Dict[str, Any], args: argparse.Namespace, jobs: List[Any] = None):
       """Display the formula and parameters in a formatted way"""
 
       # Header
@@ -3038,6 +3060,10 @@ class ScoreFormulaCommand(BaseCommand):
       # Parameters table (unless --no-defaults is specified)
       if not getattr(args, 'no_defaults', False):
          self._display_parameters_table(server_defaults)
+
+      # Job-specific parameters table (if jobs provided)
+      if jobs:
+         self._display_job_parameters_table(jobs, server_defaults, formula)
 
    def _display_formula_breakdown(self, formula: str):
       """Display a breakdown of the formula components"""
@@ -3112,4 +3138,950 @@ class ScoreFormulaCommand(BaseCommand):
       self.console.print("[dim]  - Source 'server' = value from PBS server resources_default[/dim]")
       self.console.print("[dim]  - Source 'job' = value from job's Resource_List or computed at runtime[/dim]")
       self.console.print("[dim]  - Jobs can override server defaults via resource requests[/dim]")
+
+   def _display_job_parameters_table(self, jobs: List[Any], server_defaults: Dict[str, Any], formula: str):
+      """Display a table of formula parameter values for the specified jobs"""
+
+      self.console.print()
+      self.console.print("[bold]Parameters for Given Job IDs:[/bold]")
+      self.console.print()
+
+      # Build job data for each job
+      job_data = []
+      for job in jobs:
+         resource_list = job.raw_attributes.get('Resource_List', {})
+
+         # Get job-specific values, falling back to server defaults
+         base_score = int(resource_list.get('base_score', server_defaults.get('base_score', 0)))
+         score_boost = int(resource_list.get('score_boost', server_defaults.get('score_boost', 0)))
+         enable_wfp = int(resource_list.get('enable_wfp', server_defaults.get('enable_wfp', 0)))
+         wfp_factor = int(resource_list.get('wfp_factor', server_defaults.get('wfp_factor', 100000)))
+         enable_backfill = int(resource_list.get('enable_backfill', server_defaults.get('enable_backfill', 0)))
+         backfill_max = int(resource_list.get('backfill_max', server_defaults.get('backfill_max', 50)))
+         backfill_factor = int(resource_list.get('backfill_factor', server_defaults.get('backfill_factor', 84600)))
+         enable_fifo = int(resource_list.get('enable_fifo', server_defaults.get('enable_fifo', 1)))
+         fifo_factor = int(resource_list.get('fifo_factor', server_defaults.get('fifo_factor', 1800)))
+         total_cpus = int(server_defaults.get('total_cpus', 1))
+
+         # Job-specific parameters
+         project_priority = int(resource_list.get('project_priority', 1))
+         nodect = job.nodes or 1
+         walltime_str = job.walltime or '01:00:00'
+         walltime_seconds = self._parse_walltime_to_seconds(walltime_str)
+         eligible_time_raw = job.raw_attributes.get('eligible_time', '0')
+         eligible_time_seconds = self._parse_walltime_to_seconds(str(eligible_time_raw)) if eligible_time_raw else 0
+
+         # Calculate score terms
+         base_term = base_score
+         boost_term = score_boost
+
+         # WFP term calculation (matching the formula structure)
+         try:
+            wfp_term = enable_wfp * wfp_factor * (
+               eligible_time_seconds ** 2 /
+               min(max(walltime_seconds, 21600.0), 43200.0) ** 3 *
+               project_priority * nodect / total_cpus
+            )
+         except (ZeroDivisionError, ValueError):
+            wfp_term = 0
+
+         # Backfill term
+         try:
+            backfill_term = enable_backfill * min(backfill_max, eligible_time_seconds / backfill_factor)
+         except (ZeroDivisionError, ValueError):
+            backfill_term = 0
+
+         # FIFO term
+         try:
+            fifo_term = enable_fifo * eligible_time_seconds / fifo_factor
+         except (ZeroDivisionError, ValueError):
+            fifo_term = 0
+
+         total_score = base_term + boost_term + wfp_term + backfill_term + fifo_term
+
+         # Truncate job ID for column header
+         display_job_id = job.job_id.split('.')[0]  # Just the numeric part
+
+         job_data.append({
+            'job_id': display_job_id,
+            'base_score': str(base_score),
+            'score_boost': str(score_boost),
+            'enable_wfp': str(enable_wfp),
+            'wfp_factor': str(wfp_factor),
+            'enable_backfill': str(enable_backfill),
+            'backfill_max': str(backfill_max),
+            'backfill_factor': str(backfill_factor),
+            'enable_fifo': str(enable_fifo),
+            'fifo_factor': str(fifo_factor),
+            'project_priority': str(project_priority),
+            'nodect': str(nodect),
+            'total_cpus': str(total_cpus),
+            'walltime': f'{walltime_str} ({int(walltime_seconds)}s)',
+            'eligible_time': str(eligible_time_raw),
+            # Score terms
+            'base_term': f'{base_term:,.0f}',
+            'boost_term': f'{boost_term:,.0f}',
+            'wfp_term': f'{wfp_term:,.2f}',
+            'backfill_term': f'{backfill_term:,.2f}',
+            'fifo_term': f'{fifo_term:,.2f}',
+            'total_score': f'{total_score:,.2f}',
+         })
+
+      # Build the table with jobs as columns
+      from rich.table import Table
+
+      table = Table(title="Job Formula Parameters", show_header=True, header_style="bold magenta")
+      table.add_column("Variable", style="cyan")
+      for jd in job_data:
+         table.add_column(jd['job_id'], style="cyan")
+
+      # Parameter rows
+      params = [
+         ('base_score', 'base_score'),
+         ('score_boost', 'score_boost'),
+         ('enable_wfp', 'enable_wfp'),
+         ('wfp_factor', 'wfp_factor'),
+         ('enable_backfill', 'enable_backfill'),
+         ('backfill_max', 'backfill_max'),
+         ('backfill_factor', 'backfill_factor'),
+         ('enable_fifo', 'enable_fifo'),
+         ('fifo_factor', 'fifo_factor'),
+         ('project_priority', 'project_priority'),
+         ('nodect', 'nodect'),
+         ('total_cpus', 'total_cpus'),
+         ('walltime', 'walltime'),
+         ('eligible_time', 'eligible_time'),
+      ]
+
+      for label, key in params:
+         row = [label] + [jd[key] for jd in job_data]
+         table.add_row(*row)
+
+      # Add separator
+      table.add_section()
+
+      # Score component rows
+      score_rows = [
+         ('base_term', 'base_term'),
+         ('boost_term', 'boost_term'),
+         ('wfp_term', 'wfp_term'),
+         ('backfill_term', 'backfill_term'),
+         ('fifo_term', 'fifo_term'),
+         ('TOTAL SCORE', 'total_score'),
+      ]
+
+      for label, key in score_rows:
+         row = [f'[bold]{label}[/bold]' if label == 'TOTAL SCORE' else label]
+         for jd in job_data:
+            val = jd[key]
+            if label == 'TOTAL SCORE':
+               row.append(f'[bold]{val}[/bold]')
+            else:
+               row.append(val)
+         table.add_row(*row)
+
+      self.console.print(table)
+      self.console.print()
+
+   def _generate_plots(self, args: argparse.Namespace, formula: str, server_defaults: Dict[str, Any]) -> int:
+      """Generate score evolution plots"""
+      try:
+         import matplotlib.pyplot as plt
+         import seaborn as sns
+         import numpy as np
+      except ImportError as e:
+         print(f"Error: Plotting requires matplotlib, seaborn, and numpy. {e}")
+         return 1
+
+      import os
+      from collections import defaultdict
+      import random
+
+      # Set up output directory
+      output_dir = getattr(args, 'output_dir', 'plots/score_formula')
+      os.makedirs(output_dir, exist_ok=True)
+
+      # Get job configurations based on input mode
+      configs = self._get_job_configs(args, server_defaults)
+
+      if not configs:
+         print("Error: No job configurations available to plot")
+         return 1
+
+      # Set up plotting style
+      sns.set_context('talk')
+      sns.set_style('whitegrid')
+
+      self.console.print()
+      self.console.print("[bold cyan]Generating Score Evolution Plots[/bold cyan]")
+      self.console.print("=" * 60)
+      self.console.print()
+      self.console.print(f"[dim]Output directory: {output_dir}[/dim]")
+      self.console.print(f"[dim]Job configurations: {len(configs)}[/dim]")
+      self.console.print()
+
+      # Generate plot types
+      outputs = {}
+
+      try:
+         result = self._plot_score_vs_time(configs, formula, server_defaults, args, output_dir)
+         outputs.update(result)
+      except Exception as e:
+         self.logger.warning(f"Plot score_vs_time failed: {e}")
+         print(f"  Warning: Score vs Time plot failed: {e}")
+
+      try:
+         result = self._plot_score_heatmap(formula, server_defaults, args, output_dir)
+         outputs.update(result)
+      except Exception as e:
+         self.logger.warning(f"Plot score_heatmap failed: {e}")
+         print(f"  Warning: Score heatmap plot failed: {e}")
+
+      # Display saved plot paths
+      if outputs:
+         self.console.print("[bold]Generated plots:[/bold]")
+         for name, path in outputs.items():
+            self.console.print(f"  [green]{name}[/green]: {path}")
+      else:
+         print("No plots were generated successfully")
+         return 1
+
+      return 0
+
+   def _get_job_configs(self, args: argparse.Namespace, server_defaults: Dict[str, Any]) -> List[Dict[str, Any]]:
+      """Get job configurations based on input mode"""
+      configs = []
+
+      # Mode 1: Interactive config from CLI flags
+      nodes_arg = getattr(args, 'nodes', None)
+      walltime_arg = getattr(args, 'walltime', None)
+      if nodes_arg or walltime_arg:
+         walltime_str = walltime_arg or '01:00:00'
+         nodes = nodes_arg or 1
+         configs.append({
+            'label': f"{nodes} nodes, {walltime_str}",
+            'nodect': nodes,
+            'walltime_seconds': self._parse_walltime_to_seconds(walltime_str),
+            'project_priority': getattr(args, 'project_priority', 1),
+         })
+         return configs
+
+      # Mode 2: Extract configs from specific job IDs
+      job_ids = getattr(args, 'job_ids', None)
+      if job_ids:
+         for job_id in job_ids:
+            try:
+               job = self.collector.get_job_by_id(job_id)
+               if job:
+                  resource_list = job.raw_attributes.get('Resource_List', {})
+                  configs.append({
+                     'label': f"{job_id[:20]} ({job.nodes}n, {job.queue})",
+                     'nodect': job.nodes or 1,
+                     'walltime_seconds': self._parse_walltime_to_seconds(job.walltime or '01:00:00'),
+                     'project_priority': int(resource_list.get('project_priority', 1)),
+                  })
+               else:
+                  self.logger.warning(f"Job {job_id} not found")
+            except Exception as e:
+               self.logger.warning(f"Failed to get job {job_id}: {e}")
+         return configs if configs else self._get_predefined_configs(server_defaults)
+
+      # Mode 3: Sample from current queue (default)
+      sample_count = getattr(args, 'sample_count', 6)
+      return self._sample_jobs_from_queue(sample_count, server_defaults)
+
+   def _sample_jobs_from_queue(self, count: int, server_defaults: Dict[str, Any]) -> List[Dict[str, Any]]:
+      """Sample representative jobs from current queue across queues and allocation types"""
+      from collections import defaultdict
+      import random
+
+      try:
+         jobs = self.collector.get_jobs()
+         queued_jobs = [j for j in jobs if j.state.value == 'Q']
+      except Exception as e:
+         self.logger.warning(f"Failed to get jobs from queue: {e}")
+         return self._get_predefined_configs(server_defaults)
+
+      if not queued_jobs:
+         self.console.print("[dim]No queued jobs found, using predefined configurations[/dim]")
+         return self._get_predefined_configs(server_defaults)
+
+      # Group by (queue, allocation_type) and sample
+      groups = defaultdict(list)
+      for job in queued_jobs:
+         key = (job.queue, job.allocation_type or 'unknown')
+         groups[key].append(job)
+
+      # Sample up to `count` jobs, trying to get diversity
+      sampled = []
+      keys = list(groups.keys())
+      random.shuffle(keys)
+
+      for key in keys:
+         if len(sampled) >= count:
+            break
+         job = random.choice(groups[key])
+         resource_list = job.raw_attributes.get('Resource_List', {})
+         sampled.append({
+            'label': f"{job.queue}/{job.allocation_type or '?'} ({job.nodes}n)",
+            'nodect': job.nodes or 1,
+            'walltime_seconds': self._parse_walltime_to_seconds(job.walltime or '01:00:00'),
+            'project_priority': int(resource_list.get('project_priority', 1)),
+         })
+
+      return sampled if sampled else self._get_predefined_configs(server_defaults)
+
+   def _get_predefined_configs(self, server_defaults: Dict[str, Any]) -> List[Dict[str, Any]]:
+      """Fallback predefined job configurations"""
+      return [
+         {'label': '1 node, 1hr', 'nodect': 1, 'walltime_seconds': 3600, 'project_priority': 1},
+         {'label': '10 nodes, 6hr', 'nodect': 10, 'walltime_seconds': 21600, 'project_priority': 1},
+         {'label': '100 nodes, 12hr', 'nodect': 100, 'walltime_seconds': 43200, 'project_priority': 1},
+         {'label': '500 nodes, 24hr', 'nodect': 500, 'walltime_seconds': 86400, 'project_priority': 1},
+      ]
+
+   def _evaluate_formula(self, formula: str, nodect: int, walltime_seconds: float,
+                         eligible_time_seconds: float, project_priority: int,
+                         server_defaults: Dict[str, Any]) -> float:
+      """Evaluate the job sort formula with given parameters"""
+      variables = {
+         "base_score": int(server_defaults.get("base_score", 0)),
+         "score_boost": int(server_defaults.get("score_boost", 0)),
+         "enable_wfp": int(server_defaults.get("enable_wfp", 0)),
+         "wfp_factor": int(server_defaults.get("wfp_factor", 100000)),
+         "enable_backfill": int(server_defaults.get("enable_backfill", 0)),
+         "backfill_max": int(server_defaults.get("backfill_max", 50)),
+         "backfill_factor": int(server_defaults.get("backfill_factor", 84600)),
+         "enable_fifo": int(server_defaults.get("enable_fifo", 1)),
+         "fifo_factor": int(server_defaults.get("fifo_factor", 1800)),
+         "total_cpus": int(server_defaults.get("total_cpus", 1)),
+         "project_priority": project_priority,
+         "nodect": nodect,
+         "walltime": walltime_seconds,
+         "eligible_time": eligible_time_seconds,
+         "min": min,
+         "max": max,
+      }
+      return float(eval(formula, {"__builtins__": {}}, variables))
+
+   def _parse_walltime_to_seconds(self, walltime_str: str) -> float:
+      """Parse walltime string (HH:MM:SS or DD:HH:MM:SS) to seconds"""
+      if not walltime_str:
+         return 3600.0  # Default 1 hour
+
+      try:
+         parts = walltime_str.split(':')
+         if len(parts) == 3:
+            hours, minutes, seconds = map(int, parts)
+            return hours * 3600 + minutes * 60 + seconds
+         elif len(parts) == 4:
+            days, hours, minutes, seconds = map(int, parts)
+            return days * 86400 + hours * 3600 + minutes * 60 + seconds
+         else:
+            return 3600.0
+      except (ValueError, TypeError):
+         return 3600.0
+
+   def _plot_score_vs_time(self, configs: List[Dict[str, Any]], formula: str,
+                           server_defaults: Dict[str, Any], args: argparse.Namespace,
+                           output_dir: str) -> Dict[str, str]:
+      """Plot 1: Score vs eligible time for different configurations"""
+      import matplotlib.pyplot as plt
+      import numpy as np
+
+      max_time_hours = getattr(args, 'max_time_hours', 48.0)
+
+      # Create time array (in seconds)
+      time_hours = np.linspace(0.1, max_time_hours, 200)
+      time_seconds = time_hours * 3600
+
+      fig, ax = plt.subplots(figsize=(12, 7))
+
+      # Calculate and plot score for each config
+      for config in configs:
+         scores = []
+         for t in time_seconds:
+            score = self._evaluate_formula(
+               formula,
+               nodect=config['nodect'],
+               walltime_seconds=config['walltime_seconds'],
+               eligible_time_seconds=t,
+               project_priority=config['project_priority'],
+               server_defaults=server_defaults
+            )
+            scores.append(score)
+         ax.plot(time_hours, scores, label=config['label'], linewidth=2)
+
+      ax.set_xlabel('Eligible Time (hours)')
+      ax.set_ylabel('Score')
+      ax.set_title('PBS Job Score vs Wait Time\n(Higher score = higher priority)')
+      ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', frameon=True)
+      ax.grid(True, alpha=0.3)
+
+      # Add formula info as annotation
+      ax.annotate(
+         f"Formula components: Base + WFP + Backfill + FIFO",
+         xy=(0.02, 0.02), xycoords='axes fraction',
+         fontsize=8, color='gray'
+      )
+
+      plt.tight_layout()
+      path = os.path.join(output_dir, 'score_vs_time.png')
+      fig.savefig(path, bbox_inches='tight', dpi=120)
+      plt.close(fig)
+
+      return {'score_vs_time': path}
+
+   def _plot_score_heatmap(self, formula: str, server_defaults: Dict[str, Any],
+                           args: argparse.Namespace, output_dir: str) -> Dict[str, str]:
+      """Plot 3: 2D heatmap of score(nodes, walltime) at fixed eligible_time"""
+      import matplotlib.pyplot as plt
+      import numpy as np
+
+      # Fixed eligible time for heatmap (6 hours is a reasonable wait)
+      eligible_time_hours = 6.0
+      eligible_time_seconds = eligible_time_hours * 3600
+
+      # Create grid of nodes and walltime
+      nodes_range = np.array([1, 2, 5, 10, 20, 50, 100, 200, 500, 1000])
+      walltime_hours = np.array([1, 2, 4, 6, 12, 24, 48])
+      walltime_seconds = walltime_hours * 3600
+
+      # Calculate scores for grid
+      scores = np.zeros((len(nodes_range), len(walltime_hours)))
+
+      for i, nodes in enumerate(nodes_range):
+         for j, wt in enumerate(walltime_seconds):
+            score = self._evaluate_formula(
+               formula,
+               nodect=int(nodes),
+               walltime_seconds=float(wt),
+               eligible_time_seconds=eligible_time_seconds,
+               project_priority=1,
+               server_defaults=server_defaults
+            )
+            scores[i, j] = score
+
+      fig, ax = plt.subplots(figsize=(10, 8))
+
+      # Create heatmap
+      import seaborn as sns
+      heatmap = sns.heatmap(
+         scores,
+         xticklabels=[f'{h}h' for h in walltime_hours],
+         yticklabels=nodes_range,
+         annot=True,
+         fmt='.0f',
+         cmap='YlOrRd',
+         ax=ax,
+         cbar_kws={'label': 'Score'}
+      )
+
+      ax.set_xlabel('Walltime')
+      ax.set_ylabel('Nodes')
+      ax.set_title(f'Job Score Heatmap\n(eligible_time = {eligible_time_hours}h, project_priority = 1)')
+
+      # Invert y-axis to have small nodes at bottom
+      ax.invert_yaxis()
+
+      plt.tight_layout()
+      path = os.path.join(output_dir, 'score_heatmap.png')
+      fig.savefig(path, bbox_inches='tight', dpi=120)
+      plt.close(fig)
+
+      return {'score_heatmap': path}
+
+   def _generate_grid_plot(self, args: argparse.Namespace, formula: str,
+                           server_defaults: Dict[str, Any]) -> int:
+      """Generate high-resolution grid plot showing score components across node/walltime combinations"""
+      try:
+         import matplotlib.pyplot as plt
+         import numpy as np
+      except ImportError as e:
+         print(f"Error: Plotting requires matplotlib and numpy. {e}")
+         return 1
+
+      import os
+
+      # Set up output directory
+      output_dir = getattr(args, 'output_dir', 'plots/score_formula')
+      os.makedirs(output_dir, exist_ok=True)
+
+      # Get grid configuration
+      grid_nodes = getattr(args, 'grid_nodes', [256, 512, 1024, 2048, 4096, 8192])
+      grid_walltimes = getattr(args, 'grid_walltimes', [3, 6, 10, 12, 18, 24])
+      max_time_hours = getattr(args, 'max_time_hours', 48.0)
+      routing_queue = getattr(args, 'routing_queue', 'prod')
+
+      # Detect execution queues from routing queue
+      queue_configs = self._detect_queue_configs(routing_queue)
+
+      if not queue_configs:
+         print(f"Warning: Could not detect queues from routing queue '{routing_queue}'. Using server defaults.")
+         queue_configs = [{'name': 'default', 'min_nodes': 0, 'max_nodes': float('inf'), 'defaults': server_defaults}]
+
+      self.console.print()
+      self.console.print("[bold cyan]Generating Score Component Grid Plot[/bold cyan]")
+      self.console.print("=" * 60)
+      self.console.print()
+      self.console.print(f"[dim]Output directory: {output_dir}[/dim]")
+      self.console.print(f"[dim]Grid dimensions: {len(grid_nodes)} columns (nodes) × {len(grid_walltimes)} rows (walltimes)[/dim]")
+      self.console.print(f"[dim]Routing queue: {routing_queue}[/dim]")
+      self.console.print(f"[dim]Detected execution queues: {', '.join(q['name'] for q in queue_configs)}[/dim]")
+      self.console.print()
+
+      # Generate the grid plot
+      path = self._plot_score_grid(
+         grid_nodes, grid_walltimes, max_time_hours,
+         formula, queue_configs, server_defaults, output_dir, args
+      )
+
+      self.console.print("[bold]Generated plot:[/bold]")
+      self.console.print(f"  [green]score_grid[/green]: {path}")
+
+      return 0
+
+   def _detect_queue_configs(self, routing_queue: str) -> List[Dict[str, Any]]:
+      """Detect execution queues and their settings from a routing queue"""
+      try:
+         # Get queue data
+         queues = self.collector.pbs_commands.qstat_queues()
+
+         # Find the routing queue
+         routing_q = None
+         for q in queues:
+            if q.name == routing_queue:
+               routing_q = q
+               break
+
+         if not routing_q:
+            self.logger.warning(f"Routing queue '{routing_queue}' not found")
+            return []
+
+         # Get route_destinations from raw_attributes
+         route_destinations = routing_q.raw_attributes.get('route_destinations', '')
+         if not route_destinations:
+            self.logger.warning(f"No route_destinations found for queue '{routing_queue}'")
+            return []
+
+         # Parse destination queue names (comma-separated)
+         dest_queue_names = [name.strip() for name in route_destinations.split(',')]
+
+         # Filter out backfill queues - we only want the primary WFP queues
+         primary_queues = [name for name in dest_queue_names if not name.startswith('backfill-')]
+
+         # Build queue configurations
+         queue_configs = []
+         queues_by_name = {q.name: q for q in queues}
+
+         for queue_name in primary_queues:
+            if queue_name not in queues_by_name:
+               continue
+
+            q = queues_by_name[queue_name]
+            raw = q.raw_attributes
+
+            # Extract node limits from resources_min/max
+            resources_min = raw.get('resources_min', {})
+            resources_max = raw.get('resources_max', {})
+            resources_default = raw.get('resources_default', {})
+
+            min_nodes = resources_min.get('nodect', 1)
+            max_nodes = resources_max.get('nodect', float('inf'))
+
+            # Parse as int if string
+            if isinstance(min_nodes, str):
+               min_nodes = int(min_nodes)
+            if isinstance(max_nodes, str):
+               max_nodes = int(max_nodes)
+
+            # Extract walltime limits
+            max_walltime = resources_max.get('walltime')
+            min_walltime = resources_min.get('walltime')
+
+            max_walltime_hours = self._parse_walltime_to_hours(max_walltime) if max_walltime else None
+            min_walltime_hours = self._parse_walltime_to_hours(min_walltime) if min_walltime else None
+
+            queue_configs.append({
+               'name': queue_name,
+               'min_nodes': min_nodes,
+               'max_nodes': max_nodes,
+               'min_walltime_hours': min_walltime_hours,
+               'max_walltime_hours': max_walltime_hours,
+               'defaults': resources_default
+            })
+
+         # Sort by min_nodes
+         queue_configs.sort(key=lambda x: x['min_nodes'])
+
+         # Also check prod-large routing queue for large jobs
+         if routing_queue == 'prod' and 'prod-large' in queues_by_name:
+            prod_large = queues_by_name['prod-large']
+            large_destinations = prod_large.raw_attributes.get('route_destinations', '')
+            large_dest_names = [name.strip() for name in large_destinations.split(',')]
+            large_primary = [name for name in large_dest_names if not name.startswith('backfill-')]
+
+            for queue_name in large_primary:
+               if queue_name not in queues_by_name:
+                  continue
+               if any(qc['name'] == queue_name for qc in queue_configs):
+                  continue  # Already added
+
+               q = queues_by_name[queue_name]
+               raw = q.raw_attributes
+
+               resources_min = raw.get('resources_min', {})
+               resources_max = raw.get('resources_max', {})
+               resources_default = raw.get('resources_default', {})
+
+               min_nodes = resources_min.get('nodect', 1)
+               max_nodes = resources_max.get('nodect', float('inf'))
+
+               if isinstance(min_nodes, str):
+                  min_nodes = int(min_nodes)
+               if isinstance(max_nodes, str):
+                  max_nodes = int(max_nodes)
+
+               # Extract walltime limits
+               max_walltime = resources_max.get('walltime')
+               min_walltime = resources_min.get('walltime')
+
+               max_walltime_hours = self._parse_walltime_to_hours(max_walltime) if max_walltime else None
+               min_walltime_hours = self._parse_walltime_to_hours(min_walltime) if min_walltime else None
+
+               queue_configs.append({
+                  'name': queue_name,
+                  'min_nodes': min_nodes,
+                  'max_nodes': max_nodes,
+                  'min_walltime_hours': min_walltime_hours,
+                  'max_walltime_hours': max_walltime_hours,
+                  'defaults': resources_default
+               })
+
+         # Re-sort after adding large queue
+         queue_configs.sort(key=lambda x: x['min_nodes'])
+
+         return queue_configs
+
+      except Exception as e:
+         self.logger.error(f"Error detecting queue configs: {e}")
+         return []
+
+   def _get_queue_for_nodes(self, nodect: int, queue_configs: List[Dict[str, Any]]) -> Dict[str, Any]:
+      """Find the appropriate queue config for a given node count.
+
+      When a node count is exactly at a boundary between queues (e.g., 2048 is both
+      medium's max and large's min), we prefer the larger queue since PBS routing
+      typically uses the minimum node count as the entry point.
+      """
+      # Check in reverse order (largest first) so boundary values go to the larger queue
+      for qc in reversed(queue_configs):
+         if qc['min_nodes'] <= nodect <= qc['max_nodes']:
+            return qc
+      # Fallback to last queue (largest)
+      return queue_configs[-1] if queue_configs else None
+
+   def _plot_score_grid(self, grid_nodes: List[int], grid_walltimes: List[float],
+                        max_time_hours: float, formula: str,
+                        queue_configs: List[Dict[str, Any]], server_defaults: Dict[str, Any],
+                        output_dir: str, args: argparse.Namespace) -> str:
+      """Generate the grid plot with score components"""
+      import matplotlib.pyplot as plt
+      import numpy as np
+
+      n_cols = len(grid_nodes)
+      n_rows = len(grid_walltimes)
+
+      # Create figure with shared axes, tight layout
+      fig, axes = plt.subplots(n_rows, n_cols, figsize=(20, 20), sharex=True, sharey=True)
+
+      # Eliminate gaps between subplots
+      fig.subplots_adjust(hspace=0, wspace=0)
+
+      # Time array for x-axis
+      time_hours = np.linspace(0.1, max_time_hours, 200)
+      time_seconds = time_hours * 3600
+
+      # Component colors (consistent across all plots)
+      colors = {
+         'base': '#888888',      # Gray
+         'wfp': '#1f77b4',       # Blue
+         'backfill': '#ff7f0e',  # Orange
+         'fifo': '#2ca02c'       # Green
+      }
+
+      # Track global y-axis max for consistent scaling (only from valid configs)
+      global_max_score = 0
+
+      # First pass: calculate all scores to find global max, check validity
+      all_scores = {}
+      valid_configs = {}
+      for row_idx, walltime_hours in enumerate(grid_walltimes):
+         walltime_seconds = walltime_hours * 3600
+         for col_idx, nodect in enumerate(grid_nodes):
+            # Get queue config for this node count
+            qc = self._get_queue_for_nodes(nodect, queue_configs)
+
+            # Check if this config is valid for the queue
+            is_valid = self._is_valid_job_config(nodect, walltime_hours, qc)
+            valid_configs[(row_idx, col_idx)] = is_valid
+
+            if is_valid:
+               defaults = qc['defaults'] if qc else server_defaults
+
+               # Calculate components
+               components = self._calculate_score_components(
+                  time_seconds, nodect, walltime_seconds, defaults, server_defaults
+               )
+               all_scores[(row_idx, col_idx)] = components
+
+               total = components['base'] + components['wfp'] + components['backfill'] + components['fifo']
+               max_total = np.max(total)
+               if max_total > global_max_score:
+                  global_max_score = max_total
+
+      # Add some headroom and set minimum for log scale
+      use_log_scale = getattr(args, 'log_scale', False)
+      y_min = 1.0 if use_log_scale else 0  # Minimum value for log scale
+      y_max = global_max_score * (1.5 if use_log_scale else 1.1) if global_max_score > 0 else 100
+
+      # Second pass: plot
+      for row_idx, walltime_hours in enumerate(grid_walltimes):
+         for col_idx, nodect in enumerate(grid_nodes):
+            ax = axes[row_idx, col_idx]
+
+            # Get queue config for this node count
+            qc = self._get_queue_for_nodes(nodect, queue_configs)
+            queue_name = qc['name'] if qc else 'default'
+
+            # Check if this config is valid
+            is_valid = valid_configs[(row_idx, col_idx)]
+
+            # Set log scale for y-axis if requested
+            if use_log_scale:
+               ax.set_yscale('log')
+
+            if not is_valid:
+               # Show "Not Allowed" for invalid configurations
+               ax.set_facecolor('#f5f5f5')  # Light gray background
+               ax.text(0.5, 0.5, 'Not\nAllowed', transform=ax.transAxes,
+                       ha='center', va='center', fontsize=14, fontweight='bold',
+                       color='#999999', alpha=0.8)
+               ax.set_ylim(y_min, y_max)
+            else:
+               components = all_scores[(row_idx, col_idx)]
+
+               # Plot lines for each component (clip to minimum value for log scale if needed)
+               if use_log_scale:
+                  base_plot = np.maximum(components['base'], y_min)
+                  wfp_plot = np.maximum(components['wfp'], y_min)
+                  backfill_plot = np.maximum(components['backfill'], y_min)
+                  fifo_plot = np.maximum(components['fifo'], y_min)
+               else:
+                  base_plot = components['base']
+                  wfp_plot = components['wfp']
+                  backfill_plot = components['backfill']
+                  fifo_plot = components['fifo']
+
+               ax.plot(time_hours, base_plot, color=colors['base'],
+                       linewidth=1.5, label='Base', alpha=0.7)
+               ax.plot(time_hours, wfp_plot, color=colors['wfp'],
+                       linewidth=2, label='WFP')
+               ax.plot(time_hours, backfill_plot, color=colors['backfill'],
+                       linewidth=2, label='Backfill')
+               ax.plot(time_hours, fifo_plot, color=colors['fifo'],
+                       linewidth=2, label='FIFO')
+
+               # Total score as dashed black line
+               total = components['base'] + components['wfp'] + components['backfill'] + components['fifo']
+               if use_log_scale:
+                  total_plot = np.maximum(total, y_min)
+               else:
+                  total_plot = total
+               ax.plot(time_hours, total_plot, color='black', linewidth=2,
+                       linestyle='--', label='Total', alpha=0.8)
+
+               # Set consistent y-axis
+               ax.set_ylim(y_min, y_max)
+
+            # Add queue name annotation in corner
+            ax.annotate(queue_name, xy=(0.97, 0.97), xycoords='axes fraction',
+                        fontsize=10, ha='right', va='top', color='gray')
+
+            # Only show x-tick labels on bottom row
+            if row_idx != n_rows - 1:
+               ax.tick_params(axis='x', labelbottom=False)
+            else:
+               ax.tick_params(axis='x', labelsize=11)
+
+            # Only show y-tick labels on leftmost column
+            if col_idx != 0:
+               ax.tick_params(axis='y', labelleft=False)
+            else:
+               ax.tick_params(axis='y', labelsize=11)
+
+            # Light grid
+            ax.grid(True, alpha=0.2, linewidth=0.5)
+
+            # Remove individual subplot frames except outer edges
+            ax.spines['top'].set_visible(row_idx == 0)
+            ax.spines['bottom'].set_visible(row_idx == n_rows - 1)
+            ax.spines['left'].set_visible(col_idx == 0)
+            ax.spines['right'].set_visible(col_idx == n_cols - 1)
+
+      # Add column headers (node counts) at top
+      for col_idx, nodect in enumerate(grid_nodes):
+         axes[0, col_idx].set_title(f'{nodect} nodes', fontsize=14, fontweight='bold', pad=12)
+
+      # Add row labels (walltimes) on the left
+      for row_idx, walltime_hours in enumerate(grid_walltimes):
+         # Format walltime nicely
+         if walltime_hours == int(walltime_hours):
+            wt_label = f'{int(walltime_hours)}h'
+         else:
+            wt_label = f'{walltime_hours}h'
+         axes[row_idx, 0].set_ylabel(wt_label, fontsize=14, fontweight='bold', rotation=0,
+                                      ha='right', va='center', labelpad=20)
+
+      # Add overall axis labels
+      fig.text(0.5, 0.02, 'Eligible Time (hours)', ha='center', fontsize=16, fontweight='bold')
+      fig.text(0.02, 0.5, 'Walltime', va='center', rotation='vertical', fontsize=16, fontweight='bold')
+
+      # Add legend at top - find a valid axes for legend handles
+      legend_handles = None
+      legend_labels = None
+      for row_idx in range(n_rows):
+         for col_idx in range(n_cols):
+            if valid_configs[(row_idx, col_idx)]:
+               handles, labels = axes[row_idx, col_idx].get_legend_handles_labels()
+               if handles:
+                  legend_handles = handles
+                  legend_labels = labels
+                  break
+         if legend_handles:
+            break
+
+      if legend_handles:
+         fig.legend(legend_handles, legend_labels, loc='upper center', ncol=5, fontsize=12,
+                    bbox_to_anchor=(0.5, 0.99), frameon=True)
+
+      # Add title
+      fig.suptitle('PBS Score Components by Job Configuration\n(Node Count × Walltime)',
+                   fontsize=18, fontweight='bold', y=1.03)
+
+      # Save
+      path = os.path.join(output_dir, 'score_grid.png')
+      fig.savefig(path, bbox_inches='tight', dpi=150)
+      plt.close(fig)
+
+      return path
+
+   def _is_valid_job_config(self, nodect: int, walltime_hours: float, queue_config: Dict[str, Any]) -> bool:
+      """Check if a job configuration is valid for its queue"""
+      if not queue_config:
+         return True  # No queue info, assume valid
+
+      # Check node count bounds
+      min_nodes = queue_config.get('min_nodes', 0)
+      max_nodes = queue_config.get('max_nodes', float('inf'))
+
+      if nodect < min_nodes or nodect > max_nodes:
+         return False
+
+      # Check walltime bounds
+      max_walltime_hours = queue_config.get('max_walltime_hours')
+      min_walltime_hours = queue_config.get('min_walltime_hours')
+
+      if max_walltime_hours is not None and walltime_hours > max_walltime_hours:
+         return False
+
+      if min_walltime_hours is not None and walltime_hours < min_walltime_hours:
+         return False
+
+      return True
+
+   def _parse_walltime_to_hours(self, walltime: str) -> float:
+      """Parse walltime string (HH:MM:SS or D:HH:MM:SS) to hours"""
+      if not walltime:
+         return 0.0
+
+      try:
+         parts = walltime.split(':')
+         if len(parts) == 3:
+            # HH:MM:SS format
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = int(parts[2])
+            return hours + minutes / 60.0 + seconds / 3600.0
+         elif len(parts) == 4:
+            # D:HH:MM:SS format
+            days = int(parts[0])
+            hours = int(parts[1])
+            minutes = int(parts[2])
+            seconds = int(parts[3])
+            return days * 24 + hours + minutes / 60.0 + seconds / 3600.0
+         else:
+            return 0.0
+      except (ValueError, TypeError):
+         return 0.0
+
+   def _calculate_score_components(self, time_seconds, nodect: int,
+                                    walltime_seconds: float, queue_defaults: Dict[str, Any],
+                                    server_defaults: Dict[str, Any]) -> Dict[str, Any]:
+      """Calculate individual score components over time
+
+      Args:
+         time_seconds: numpy array of time values in seconds
+         nodect: Number of nodes
+         walltime_seconds: Walltime in seconds
+         queue_defaults: Queue-specific default values
+         server_defaults: Server-wide default values
+
+      Returns:
+         Dict with numpy arrays for each component: base, wfp, backfill, fifo
+      """
+      import numpy as np
+
+      # Merge queue defaults with server defaults (queue takes precedence)
+      defaults = {**server_defaults, **queue_defaults}
+
+      # Extract parameters
+      base_score = int(defaults.get('base_score', 0))
+      score_boost = int(defaults.get('score_boost', 0))
+      enable_wfp = int(defaults.get('enable_wfp', 0))
+      wfp_factor = int(defaults.get('wfp_factor', 100000))
+      enable_backfill = int(defaults.get('enable_backfill', 0))
+      backfill_max = int(defaults.get('backfill_max', 50))
+      backfill_factor = int(defaults.get('backfill_factor', 84600))
+      enable_fifo = int(defaults.get('enable_fifo', 1))
+      fifo_factor = int(defaults.get('fifo_factor', 1800))
+      total_cpus = int(defaults.get('total_cpus', 10624))
+      project_priority = 1  # Default project priority
+
+      # Calculate each component
+      base_values = np.full_like(time_seconds, float(base_score + score_boost))
+
+      wfp_values = np.zeros_like(time_seconds)
+      backfill_values = np.zeros_like(time_seconds)
+      fifo_values = np.zeros_like(time_seconds)
+
+      for i, t in enumerate(time_seconds):
+         # WFP component
+         if enable_wfp and walltime_seconds > 0 and total_cpus > 0:
+            wfp_values[i] = enable_wfp * wfp_factor * (t**2 / walltime_seconds**3 * project_priority * nodect / total_cpus)
+
+         # Backfill component
+         if enable_backfill and backfill_factor > 0:
+            backfill_values[i] = enable_backfill * min(backfill_max, t / backfill_factor)
+
+         # FIFO component
+         if enable_fifo and fifo_factor > 0:
+            fifo_values[i] = enable_fifo * t / fifo_factor
+
+      return {
+         'base': base_values,
+         'wfp': wfp_values,
+         'backfill': backfill_values,
+         'fifo': fifo_values
+      }
 

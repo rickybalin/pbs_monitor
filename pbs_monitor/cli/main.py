@@ -701,6 +701,8 @@ Examples:
       "score-formula",
       help="Display and explain the PBS job sort formula"
    )
+
+   # General options
    score_formula_parser.add_argument(
       "--raw",
       action="store_true",
@@ -715,6 +717,89 @@ Examples:
       "-r", "--refresh",
       action="store_true",
       help="Force refresh of server data"
+   )
+   score_formula_parser.add_argument(
+      "--job-ids",
+      nargs="+",
+      help="Specific job IDs to display parameters for (also used for --plot sampling)"
+   )
+
+   # Plot options group
+   plot_group = score_formula_parser.add_argument_group(
+      "Plot Options (--plot)",
+      "Options for generating score evolution plots"
+   )
+   plot_group.add_argument(
+      "--plot",
+      action="store_true",
+      help="Generate score evolution plots"
+   )
+   plot_group.add_argument(
+      "--output-dir",
+      default="plots/score_formula",
+      help="Directory to save plots (default: plots/score_formula)"
+   )
+   plot_group.add_argument(
+      "--nodes",
+      type=int,
+      help="Number of nodes for interactive config"
+   )
+   plot_group.add_argument(
+      "--walltime",
+      help="Walltime for interactive config (HH:MM:SS)"
+   )
+   plot_group.add_argument(
+      "--project-priority",
+      type=int,
+      default=1,
+      help="Project priority for interactive config (default: 1)"
+   )
+   plot_group.add_argument(
+      "--sample-count",
+      type=int,
+      default=6,
+      help="Number of jobs to sample from queue (default: 6)"
+   )
+   plot_group.add_argument(
+      "--max-time-hours",
+      type=float,
+      default=48.0,
+      help="Maximum eligible time to plot in hours (default: 48)"
+   )
+
+   # Grid plot options group
+   grid_group = score_formula_parser.add_argument_group(
+      "Grid Plot Options (--plot-grid)",
+      "Options for generating grid plots showing score components"
+   )
+   grid_group.add_argument(
+      "--plot-grid",
+      action="store_true",
+      help="Generate high-resolution grid plot showing score components across node/walltime combinations"
+   )
+   grid_group.add_argument(
+      "--grid-nodes",
+      nargs="+",
+      type=int,
+      default=[256, 512, 1024, 2048, 4096, 8192],
+      help="Node counts for grid columns (default: 256 512 1024 2048 4096 8192)"
+   )
+   grid_group.add_argument(
+      "--grid-walltimes",
+      nargs="+",
+      type=float,
+      default=[3, 6, 10, 12, 18, 24],
+      help="Walltimes in hours for grid rows (default: 3 6 10 12 18 24)"
+   )
+   grid_group.add_argument(
+      "--routing-queue",
+      default="prod",
+      help="Routing queue to detect execution queues from (default: prod)"
+   )
+   grid_group.add_argument(
+      "--log-scale",
+      action="store_true",
+      help="Use logarithmic scale for y-axis in grid plot"
    )
 
    # Config command
