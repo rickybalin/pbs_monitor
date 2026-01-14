@@ -3337,6 +3337,20 @@ class ScoreFormulaCommand(BaseCommand):
          self.logger.warning(f"Plot score_heatmap failed: {e}")
          print(f"  Warning: Score heatmap plot failed: {e}")
 
+      try:
+         result = self._plot_job_shape_favorability(formula, server_defaults, output_dir)
+         outputs.update(result)
+      except Exception as e:
+         self.logger.warning(f"Plot job_shape_favorability failed: {e}")
+         print(f"  Warning: Job shape favorability plot failed: {e}")
+
+      try:
+         result = self._plot_walltime_cost(formula, server_defaults, output_dir)
+         outputs.update(result)
+      except Exception as e:
+         self.logger.warning(f"Plot walltime_cost failed: {e}")
+         print(f"  Warning: Walltime cost plot failed: {e}")
+
       # Display saved plot paths
       if outputs:
          self.console.print("[bold]Generated plots:[/bold]")
@@ -3590,6 +3604,268 @@ class ScoreFormulaCommand(BaseCommand):
       plt.close(fig)
 
       return {'score_heatmap': path}
+
+   def _parse_walltime_clamping(self, formula: str) -> Dict[str, Any]:
+      """
+      Parse the walltime clamping parameters from the job sort formula.
+
+      Looks for patterns like: min(max(walltime,21600.0),43200.0) ** 3
+      to extract floor, ceiling, and exponent values.
+
+      Returns:
+         Dict with keys: floor_seconds, ceiling_seconds, exponent, found
+      """
+      import re
+
+      result = {
+         'floor_seconds': 21600.0,   # Default: 6 hours
+         'ceiling_seconds': 43200.0, # Default: 12 hours
+         'exponent': 3,              # Default: cubic
+         'found': False
+      }
+
+      # Pattern to match: min(max(walltime,FLOOR),CEILING) ** EXP
+      # or: min(max(walltime,FLOOR),CEILING)**EXP  (no spaces)
+      # The walltime variable might have different forms
+      pattern = r'min\s*\(\s*max\s*\(\s*walltime\s*,\s*([\d.]+)\s*\)\s*,\s*([\d.]+)\s*\)\s*\*\*\s*(\d+)'
+
+      match = re.search(pattern, formula, re.IGNORECASE)
+      if match:
+         result['floor_seconds'] = float(match.group(1))
+         result['ceiling_seconds'] = float(match.group(2))
+         result['exponent'] = int(match.group(3))
+         result['found'] = True
+
+      return result
+
+   def _plot_job_shape_favorability(self, formula: str, server_defaults: Dict[str, Any],
+                                     output_dir: str) -> Dict[str, str]:
+      """
+      Plot: Job Shape Favorability Heatmap
+
+      A 2D contour plot visualizing priority score as a function of walltime (X) and
+      node count (Y), at a fixed eligible_time. Shows how job shape affects WFP score.
+
+      The clamping logic is derived from the formula to future-proof against changes.
+      """
+      import matplotlib.pyplot as plt
+      import numpy as np
+
+      # Parse clamping parameters from formula
+      clamp = self._parse_walltime_clamping(formula)
+      floor_hours = clamp['floor_seconds'] / 3600
+      ceiling_hours = clamp['ceiling_seconds'] / 3600
+      exponent = clamp['exponent']
+
+      # Fixed eligible_time for visualization (24 hours as suggested)
+      eligible_time_hours = 24.0
+      eligible_time_seconds = eligible_time_hours * 3600
+
+      # Get WFP parameters from server defaults
+      wfp_factor = int(server_defaults.get('wfp_factor', 100000))
+      total_cpus = int(server_defaults.get('total_cpus', 1))
+      enable_wfp = int(server_defaults.get('enable_wfp', 1))
+
+      # For visualization, always show WFP behavior even if disabled on server
+      # The point of this plot is to understand the formula, not the current config
+      wfp_enabled_note = ""
+      if enable_wfp == 0:
+         wfp_enabled_note = " (WFP currently disabled on server)"
+         self.logger.info("WFP is disabled on server, but showing formula behavior for visualization")
+
+      # Create grid
+      # X-axis: Walltime from 1 to 24 hours
+      walltime_hours = np.linspace(1, 24, 100)
+      # Y-axis: Nodes from 1 to 1000
+      nodes = np.linspace(1, 1000, 100)
+
+      # Create meshgrid
+      WT, N = np.meshgrid(walltime_hours, nodes)
+
+      # Apply clamping logic derived from formula
+      # Convert walltime to seconds for clamping
+      wt_seconds = WT * 3600
+      clamped_wt = np.clip(wt_seconds, clamp['floor_seconds'], clamp['ceiling_seconds'])
+
+      # Calculate WFP term (the job-shape-dependent component)
+      # Z = eligible_time^2 / clamped_time^exponent * nodes / total_cpus * wfp_factor
+      # Note: We always calculate as if WFP is enabled (for visualization purposes)
+      Z = wfp_factor * (
+         eligible_time_seconds ** 2 /
+         (clamped_wt ** exponent) *
+         N / total_cpus
+      )
+
+      # Create figure
+      fig, ax = plt.subplots(figsize=(12, 8))
+
+      # Filled contour plot
+      levels = 30
+      cf = ax.contourf(WT, N, Z, levels=levels, cmap='viridis')
+
+      # Add contour lines with labels
+      contour_lines = ax.contour(WT, N, Z, levels=10, colors='white', linewidths=0.5, alpha=0.7)
+      ax.clabel(contour_lines, inline=True, fontsize=8, fmt='%.0f')
+
+      # Add colorbar
+      cbar = fig.colorbar(cf, ax=ax, label='WFP Score Component')
+
+      # Mark clamping transition points (derived from formula)
+      ax.axvline(x=floor_hours, color='red', linestyle='--', linewidth=2,
+                 label=f'Floor ({floor_hours:.0f}h): below this, score constant')
+      ax.axvline(x=ceiling_hours, color='orange', linestyle='--', linewidth=2,
+                 label=f'Ceiling ({ceiling_hours:.0f}h): above this, penalty maxed')
+
+      # Labels and title
+      ax.set_xlabel('Requested Walltime (hours)', fontsize=12)
+      ax.set_ylabel('Node Count', fontsize=12)
+      ax.set_title(
+         f'Job Shape Favorability Heatmap{wfp_enabled_note}\n'
+         f'(eligible_time = {eligible_time_hours:.0f}h, walltime clamped to [{floor_hours:.0f}h, {ceiling_hours:.0f}h], exponent = {exponent})',
+         fontsize=12
+      )
+
+      ax.legend(loc='upper right', fontsize=9)
+      ax.grid(True, alpha=0.3, color='white')
+
+      # Add annotation explaining the visualization
+      ax.annotate(
+         f'Brighter = Higher priority\n'
+         f'Walltime penalty: (clamped_time)^{exponent}',
+         xy=(0.02, 0.02), xycoords='axes fraction',
+         fontsize=9, color='white',
+         bbox=dict(boxstyle='round', facecolor='black', alpha=0.5)
+      )
+
+      plt.tight_layout()
+      path = os.path.join(output_dir, 'job_shape_favorability.png')
+      fig.savefig(path, bbox_inches='tight', dpi=120)
+      plt.close(fig)
+
+      return {'job_shape_favorability': path}
+
+   def _plot_walltime_cost(self, formula: str, server_defaults: Dict[str, Any],
+                           output_dir: str) -> Dict[str, str]:
+      """
+      Plot: Cost of Walltime (Equivalence/Indifference Curve)
+
+      Shows how many nodes are needed to maintain the same priority score
+      as walltime increases. Answers: "To keep the same priority, how many
+      nodes do I need if I increase my walltime?"
+
+      The clamping logic is derived from the formula to future-proof against changes.
+      """
+      import matplotlib.pyplot as plt
+      import numpy as np
+
+      # Parse clamping parameters from formula
+      clamp = self._parse_walltime_clamping(formula)
+      floor_hours = clamp['floor_seconds'] / 3600
+      ceiling_hours = clamp['ceiling_seconds'] / 3600
+      exponent = clamp['exponent']
+
+      # Baseline job configuration
+      baseline_nodes = 50
+      baseline_walltime_hours = 6.0  # At the floor
+      baseline_wt_seconds = baseline_walltime_hours * 3600
+      baseline_clamped = np.clip(baseline_wt_seconds, clamp['floor_seconds'], clamp['ceiling_seconds'])
+
+      # Create walltime array (1 to 24 hours)
+      walltime_hours = np.linspace(1, 24, 200)
+      walltime_seconds = walltime_hours * 3600
+
+      # Apply clamping logic
+      clamped_wt = np.clip(walltime_seconds, clamp['floor_seconds'], clamp['ceiling_seconds'])
+
+      # Calculate required nodes to maintain same score
+      # Score ∝ nodes / clamped_time^exponent
+      # For equal scores: N_new / clamped_new^exp = N_base / clamped_base^exp
+      # Therefore: N_new = N_base * (clamped_new / clamped_base)^exp
+      required_nodes = baseline_nodes * (clamped_wt / baseline_clamped) ** exponent
+
+      # Create figure
+      fig, ax = plt.subplots(figsize=(12, 7))
+
+      # Main curve
+      ax.plot(walltime_hours, required_nodes, 'b-', linewidth=2.5, label='Required nodes')
+
+      # Mark baseline point
+      ax.scatter([baseline_walltime_hours], [baseline_nodes], color='red', s=100, zorder=5,
+                 label=f'Baseline: {baseline_nodes} nodes @ {baseline_walltime_hours:.0f}h')
+
+      # Shade the three regions
+      # Region 1: < floor (flat - no penalty increase)
+      region1_mask = walltime_hours <= floor_hours
+      ax.fill_between(walltime_hours[region1_mask], 0, required_nodes[region1_mask],
+                      alpha=0.2, color='green', label=f'No penalty (< {floor_hours:.0f}h)')
+
+      # Region 2: floor to ceiling (penalty zone - cubic growth)
+      region2_mask = (walltime_hours > floor_hours) & (walltime_hours <= ceiling_hours)
+      ax.fill_between(walltime_hours[region2_mask], 0, required_nodes[region2_mask],
+                      alpha=0.2, color='yellow', label=f'Penalty zone ({floor_hours:.0f}h - {ceiling_hours:.0f}h)')
+
+      # Region 3: > ceiling (maxed out - flat again)
+      region3_mask = walltime_hours > ceiling_hours
+      ax.fill_between(walltime_hours[region3_mask], 0, required_nodes[region3_mask],
+                      alpha=0.2, color='red', label=f'Max penalty (> {ceiling_hours:.0f}h)')
+
+      # Add vertical lines at transition points
+      ax.axvline(x=floor_hours, color='green', linestyle='--', linewidth=1.5, alpha=0.7)
+      ax.axvline(x=ceiling_hours, color='red', linestyle='--', linewidth=1.5, alpha=0.7)
+
+      # Labels and title
+      ax.set_xlabel('Requested Walltime (hours)', fontsize=12)
+      ax.set_ylabel('Nodes Required (to match baseline priority)', fontsize=12)
+      ax.set_title(
+         f'Cost of Walltime: Nodes Needed to Maintain Equal Priority\n'
+         f'(Clamping: [{floor_hours:.0f}h, {ceiling_hours:.0f}h], Exponent: {exponent})',
+         fontsize=12
+      )
+
+      ax.legend(loc='upper left', fontsize=10)
+      ax.grid(True, alpha=0.3)
+      ax.set_xlim(0, 25)
+      ax.set_ylim(0, max(required_nodes) * 1.1)
+
+      # Add interpretive annotations
+      # Annotation for flat region 1
+      flat1_y = required_nodes[region1_mask][-1] if any(region1_mask) else baseline_nodes
+      ax.annotate(
+         f'Flat: requesting <{floor_hours:.0f}h\ncosts the same as {floor_hours:.0f}h',
+         xy=(floor_hours / 2, flat1_y),
+         xytext=(floor_hours / 2, flat1_y + 50),
+         fontsize=9, ha='center',
+         arrowprops=dict(arrowstyle='->', color='gray', alpha=0.7)
+      )
+
+      # Annotation for penalty zone
+      mid_penalty = (floor_hours + ceiling_hours) / 2
+      mid_idx = np.argmin(np.abs(walltime_hours - mid_penalty))
+      ax.annotate(
+         f'Cubic growth:\n{exponent}x penalty per\ndoubling of time',
+         xy=(mid_penalty, required_nodes[mid_idx]),
+         xytext=(mid_penalty + 2, required_nodes[mid_idx] + 100),
+         fontsize=9, ha='center',
+         arrowprops=dict(arrowstyle='->', color='gray', alpha=0.7)
+      )
+
+      # Annotation for flat region 3
+      if any(region3_mask):
+         flat3_y = required_nodes[region3_mask][0]
+         ax.annotate(
+            f'Flat: >{ceiling_hours:.0f}h has same\npenalty as {ceiling_hours:.0f}h',
+            xy=(ceiling_hours + 2, flat3_y),
+            xytext=(ceiling_hours + 4, flat3_y - 80),
+            fontsize=9, ha='center',
+            arrowprops=dict(arrowstyle='->', color='gray', alpha=0.7)
+         )
+
+      plt.tight_layout()
+      path = os.path.join(output_dir, 'walltime_cost.png')
+      fig.savefig(path, bbox_inches='tight', dpi=120)
+      plt.close(fig)
+
+      return {'walltime_cost': path}
 
    def _generate_grid_plot(self, args: argparse.Namespace, formula: str,
                            server_defaults: Dict[str, Any]) -> int:

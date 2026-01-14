@@ -587,7 +587,12 @@ class AnalyzeCommand(BaseCommand):
             save_dir=out_dir,
             ts_freq=ts_freq
          )
-         saved = {**(saved_basic or {}), **(saved_adv or {})}
+         saved_run_score = analyzer.generate_run_score_plots(
+            days=days,
+            save_dir=out_dir,
+            queue_filter=qf
+         )
+         saved = {**(saved_basic or {}), **(saved_adv or {}), **(saved_run_score or {})}
          if saved:
             self.console.print("Saved:")
             for k, v in saved.items():
