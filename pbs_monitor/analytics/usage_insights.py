@@ -598,24 +598,7 @@ class UsageInsights:
       except Exception as e:
          self.logger.debug(f"Plot score_vs_node_hours_by_queue failed: {e}")
 
-      # 3) Start-score distribution by queue (violin + box)
-      try:
-         fig, ax = plt.subplots(figsize=(10, 6))
-         sns.violinplot(data=df, x='queue', y='start_score', hue='queue', inner=None, ax=ax, cut=0, palette=queue_palette, legend=False)
-         sns.boxplot(data=df, x='queue', y='start_score', ax=ax, width=0.25, showcaps=True, boxprops={'facecolor':'none'})
-         ax.set_title('Start-score distribution by queue')
-         ax.set_xlabel('Queue')
-         ax.set_ylabel('Score at start')
-         fig.autofmt_xdate(rotation=30)
-         if save_dir:
-            pth = os.path.join(save_dir, 'start_score_distribution_by_queue.png')
-            fig.savefig(pth, bbox_inches='tight', dpi=dpi)
-            outputs['start_score_distribution_by_queue'] = pth
-         plt.close(fig)
-      except Exception as e:
-         self.logger.debug(f"Plot start_score_distribution_by_queue failed: {e}")
-
-      # 4) ECDF of wait time by queue
+      # 3) ECDF of wait time by queue
       try:
          fig, ax = plt.subplots(figsize=(14, 6))
          for q, sub in df.groupby('queue'):
@@ -1967,3 +1950,609 @@ class UsageInsights:
       
       self.logger.warning("Could not determine total cluster nodes using any method")
       return None
+
+   # --------- Run Score Analysis for Production Queues ---------
+
+   def generate_run_score_plots(
+      self,
+      days: int = 30,
+      save_dir: Optional[str] = None,
+      dpi: int = 120,
+      queue_filter: Optional[QueueFilter] = None
+   ) -> Dict[str, str]:
+      """
+      Generate plots analyzing job scores at run time for production queue jobs.
+
+      Focuses on jobs routed through 'prod' queue to tiny/small/medium/large queues.
+      Creates three visualizations:
+      1. 2D Heatmap: median score/eligible_time by node count × walltime bins
+      2. Ridge plot: score distributions by job shape
+      3. Quantile regression: score vs eligible time trajectories per shape
+
+      Args:
+          days: Number of days to look back
+          save_dir: Directory to save plots (optional)
+          dpi: Plot resolution
+          queue_filter: Optional QueueFilter to control which queues are included
+
+      Returns:
+          Dict mapping plot names to file paths
+      """
+      outputs: Dict[str, str] = {}
+
+      if plt is None or sns is None:
+         self.logger.warning("Plotting libraries not available")
+         return outputs
+
+      # Fetch run score data for production queues
+      df = self._fetch_prod_run_score_data(days, queue_filter=queue_filter)
+
+      if df.empty:
+         self.logger.warning("No production queue job data found for run score analysis")
+         return outputs
+
+      self.logger.info(f"Analyzing run scores for {len(df)} production queue jobs")
+
+      if save_dir:
+         os.makedirs(save_dir, exist_ok=True)
+
+      sns.set_context('talk')
+      sns.set_style('whitegrid')
+
+      # Generate each plot type
+      try:
+         path = self._plot_run_score_heatmap(df, save_dir, dpi)
+         if path:
+            outputs['run_score_heatmap'] = path
+      except Exception as e:
+         self.logger.warning(f"Failed to generate run score heatmap: {e}")
+
+      try:
+         path = self._plot_run_score_ridge(df, save_dir, dpi)
+         if path:
+            outputs['run_score_ridge'] = path
+      except Exception as e:
+         self.logger.warning(f"Failed to generate run score ridge plot: {e}")
+
+      try:
+         path = self._plot_run_score_quantiles(df, save_dir, dpi)
+         if path:
+            outputs['run_score_quantiles'] = path
+      except Exception as e:
+         self.logger.warning(f"Failed to generate run score quantile plot: {e}")
+
+      return outputs
+
+   def _fetch_prod_run_score_data(self, days: int = 30, queue_filter: Optional[QueueFilter] = None) -> pd.DataFrame:
+      """
+      Fetch job data from production queues with score and eligible_time at run time.
+
+      By default, fetches from tiny/small/medium/large queues, but respects
+      queue_filter settings (allowlist, ignore_queues) when provided.
+
+      Returns DataFrame with columns:
+      - job_id, queue, nodes, walltime_hours
+      - eligible_time_hours: time job was eligible before running
+      - run_score: score at time job started running
+      - node_bin, walltime_bin, job_shape: categorization columns
+      """
+      from ..pbs_commands import PBSCommands
+      import re
+
+      # Default production queues
+      prod_queues = ['tiny', 'small', 'medium', 'large']
+
+      # Apply queue filter if provided
+      if queue_filter:
+         # If allowlist is specified, use only those queues (intersected with prod_queues)
+         if queue_filter.allowlist_queues:
+            prod_queues = [q for q in queue_filter.allowlist_queues if q in prod_queues] or queue_filter.allowlist_queues
+
+         # Remove ignored queues
+         if queue_filter.ignore_queues:
+            prod_queues = [q for q in prod_queues if q not in queue_filter.ignore_queues]
+
+         # Filter out reservation queues unless explicitly included
+         if not queue_filter.include_reservations and queue_filter.reservation_queue_regex:
+            resv_pattern = re.compile(queue_filter.reservation_queue_regex)
+            prod_queues = [q for q in prod_queues if not resv_pattern.match(q)]
+
+      if not prod_queues:
+         self.logger.warning("No queues remaining after applying filters")
+         return pd.DataFrame()
+
+      cutoff = datetime.now() - timedelta(days=days)
+
+      records = []
+
+      with self.repo_factory.get_job_repository().get_session() as session:
+         from ..database.models import Job, JobState
+
+         jobs = session.query(Job).filter(
+            and_(
+               Job.queue.in_(prod_queues),
+               Job.end_time >= cutoff,
+               Job.state == JobState.FINISHED,
+               Job.nodes.isnot(None),
+               Job.walltime.isnot(None),
+               Job.raw_pbs_data.isnot(None)
+            )
+         ).all()
+
+         if not jobs:
+            return pd.DataFrame()
+
+         # Get server data for score calculation
+         pbs_cmds = PBSCommands()
+         server_data = None
+         server_defaults = {}
+         try:
+            server_data = pbs_cmds.qstat_server()
+            server_info = server_data.get("Server", {})
+            for _, details in server_info.items():
+               server_defaults = details.get("resources_default", {})
+               break
+         except Exception as e:
+            self.logger.warning(f"Failed to get PBS server data: {e}")
+
+         for job in jobs:
+            try:
+               if not isinstance(job.raw_pbs_data, dict):
+                  continue
+
+               # Skip jobs with score_boost > 0 to avoid biasing results
+               resource_list = job.raw_pbs_data.get('Resource_List', {})
+               score_boost = int(resource_list.get('score_boost', 0))
+               if score_boost > 0:
+                  continue
+
+               # Parse walltime
+               walltime_hours = self._parse_walltime_to_hours(job.walltime)
+
+               # Parse eligible_time from raw PBS data
+               eligible_time_str = job.raw_pbs_data.get('eligible_time')
+               if not eligible_time_str:
+                  continue
+
+               eligible_time_secs = pbs_cmds._parse_eligible_time_to_seconds(eligible_time_str)
+               eligible_time_hours = eligible_time_secs / 3600.0
+
+               # Calculate score at run time
+               run_score = None
+               if server_data:
+                  try:
+                     run_score = pbs_cmds.calculate_job_score(
+                        job.raw_pbs_data,
+                        server_defaults=server_defaults,
+                        server_data=server_data
+                     )
+                  except Exception:
+                     pass
+
+               # Fallback to DB history if calculation failed
+               if run_score is None:
+                  run_score = self._find_start_score(session, job)
+
+               if run_score is None:
+                  continue
+
+               records.append({
+                  'job_id': job.job_id,
+                  'queue': job.queue,
+                  'nodes': job.nodes,
+                  'walltime_hours': walltime_hours,
+                  'eligible_time_hours': eligible_time_hours,
+                  'run_score': run_score,
+               })
+
+            except Exception as e:
+               self.logger.debug(f"Skipping job {job.job_id}: {e}")
+               continue
+
+      if not records:
+         return pd.DataFrame()
+
+      df = pd.DataFrame.from_records(records)
+
+      # Add binning columns
+      df['node_bin'] = df['nodes'].apply(self._categorize_nodes)
+      df['walltime_bin'] = df['walltime_hours'].apply(self._categorize_walltime)
+      df['job_shape'] = df.apply(self._categorize_job_shape, axis=1)
+
+      self.logger.info(f"Fetched {len(df)} jobs with run score data")
+
+      return df
+
+   def _categorize_nodes(self, nodes: int) -> str:
+      """
+      Categorize node count into bins aligned with Aurora queue structure.
+      Each queue range is split into 2 bins for more granularity.
+      Labels show the lower bound (upper bound is next bin's lower bound - 1).
+
+      Queue boundaries (from PBS qstat -Q):
+      - tiny: 1-512 nodes
+      - small: 513-1024 nodes
+      - medium: 1025-2048 nodes
+      - large: 2048+ nodes (min 2048, but overlaps with medium max)
+      """
+      # Tiny queue: 1-512, split into 1-256, 257-512
+      if nodes <= 256:
+         return '1 (tiny)'
+      elif nodes <= 512:
+         return '257 (tiny)'
+      # Small queue: 513-1024, split into 513-768, 769-1024
+      elif nodes <= 768:
+         return '513 (small)'
+      elif nodes <= 1024:
+         return '769 (small)'
+      # Medium queue: 1025-2048, split into 1025-1536, 1537-2048
+      elif nodes <= 1536:
+         return '1025 (medium)'
+      elif nodes <= 2048:
+         return '1537 (medium)'
+      # Large queue: 2048+, split into 2049-4096, 4097+
+      elif nodes <= 4096:
+         return '2049 (large)'
+      else:
+         return '4097 (large)'
+
+   def _categorize_walltime(self, hours: float) -> str:
+      """
+      Categorize walltime into 3-hour bins (8 bins total for 24h max).
+
+      Queue max walltimes (from PBS qstat -Q):
+      - tiny: 6h max
+      - small: 12h max
+      - medium: 18h max
+      - large: 24h max
+      """
+      if hours <= 3:
+         return '0-3h'
+      elif hours <= 6:
+         return '3-6h'
+      elif hours <= 9:
+         return '6-9h'
+      elif hours <= 12:
+         return '9-12h'
+      elif hours <= 15:
+         return '12-15h'
+      elif hours <= 18:
+         return '15-18h'
+      elif hours <= 21:
+         return '18-21h'
+      else:
+         return '21-24h'
+
+   def _categorize_job_shape(self, row: pd.Series) -> str:
+      """
+      Categorize job into a shape based on node count and walltime.
+      Aligned with Aurora queue structure for meaningful analysis.
+      """
+      nodes = row['nodes']
+      wt = row['walltime_hours']
+
+      # Node-based primary category aligned with queue boundaries
+      if nodes <= 512:
+         node_cat = 'Tiny'
+      elif nodes <= 1024:
+         node_cat = 'Small'
+      elif nodes <= 2048:
+         node_cat = 'Medium'
+      else:
+         node_cat = 'Large'
+
+      # Walltime modifier based on queue limits
+      if node_cat == 'Tiny':
+         # Tiny queue max is 6h
+         if wt <= 2:
+            return 'Tiny/Short (≤2h)'
+         elif wt <= 6:
+            return 'Tiny/Full (2-6h)'
+         else:
+            return 'Tiny/Overflow (>6h)'  # Should be rare
+      elif node_cat == 'Small':
+         # Small queue max is 12h
+         if wt <= 6:
+            return 'Small/Short (≤6h)'
+         else:
+            return 'Small/Full (6-12h)'
+      elif node_cat == 'Medium':
+         # Medium queue max is 18h
+         if wt <= 12:
+            return 'Medium/Short (≤12h)'
+         else:
+            return 'Medium/Full (12-18h)'
+      else:
+         # Large queue max is 24h
+         if wt <= 18:
+            return 'Large/Short (≤18h)'
+         else:
+            return 'Large/Full (18-24h)'
+
+   def _plot_run_score_heatmap(
+      self,
+      df: pd.DataFrame,
+      save_dir: Optional[str],
+      dpi: int
+   ) -> Optional[str]:
+      """
+      Plot 1: 2D Heatmap showing median eligible time and score by node × walltime bins.
+      """
+      # Create pivot tables for median values
+      # Node bins: 2 per queue for granularity, labeled by lower bound
+      node_order = [
+         '1 (tiny)', '257 (tiny)',
+         '513 (small)', '769 (small)',
+         '1025 (medium)', '1537 (medium)',
+         '2049 (large)', '4097 (large)'
+      ]
+      # Walltime bins: 3-hour intervals (8 bins total)
+      wt_order = [
+         '0-3h', '3-6h', '6-9h', '9-12h',
+         '12-15h', '15-18h', '18-21h', '21-24h'
+      ]
+
+      # Filter to only bins that exist
+      node_order = [n for n in node_order if n in df['node_bin'].values]
+      wt_order = [w for w in wt_order if w in df['walltime_bin'].values]
+
+      if not node_order or not wt_order:
+         return None
+
+      # Pivot for eligible time
+      pivot_elig = df.pivot_table(
+         index='node_bin',
+         columns='walltime_bin',
+         values='eligible_time_hours',
+         aggfunc='median'
+      ).reindex(index=node_order, columns=wt_order)
+
+      # Pivot for run score
+      pivot_score = df.pivot_table(
+         index='node_bin',
+         columns='walltime_bin',
+         values='run_score',
+         aggfunc='median'
+      ).reindex(index=node_order, columns=wt_order)
+
+      # Pivot for job count
+      pivot_count = df.pivot_table(
+         index='node_bin',
+         columns='walltime_bin',
+         values='job_id',
+         aggfunc='count'
+      ).reindex(index=node_order, columns=wt_order).fillna(0).astype(int)
+
+      # Create figure with two heatmaps side by side
+      fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+
+      # Left: Eligible time heatmap
+      sns.heatmap(
+         pivot_elig,
+         ax=axes[0],
+         annot=True,
+         fmt='.1f',
+         cmap='YlOrRd',
+         cbar_kws={'label': 'Hours'}
+      )
+      axes[0].set_title('Median Eligible Time at Run (hours)')
+      axes[0].set_xlabel('Walltime')
+      axes[0].set_ylabel('Node Count')
+
+      # Right: Run score heatmap
+      sns.heatmap(
+         pivot_score,
+         ax=axes[1],
+         annot=True,
+         fmt='.0f',
+         cmap='YlGnBu',
+         cbar_kws={'label': 'Score'}
+      )
+      axes[1].set_title('Median Score at Run')
+      axes[1].set_xlabel('Walltime')
+      axes[1].set_ylabel('Node Count')
+
+      # Add job counts as text annotation
+      fig.suptitle('Production Queue Jobs: Score & Wait Time by Job Shape', fontsize=14, y=1.02)
+
+      plt.tight_layout()
+
+      if save_dir:
+         path = os.path.join(save_dir, 'run_score_heatmap.png')
+         fig.savefig(path, bbox_inches='tight', dpi=dpi)
+         plt.close(fig)
+         return path
+
+      plt.close(fig)
+      return None
+
+   def _plot_run_score_ridge(
+      self,
+      df: pd.DataFrame,
+      save_dir: Optional[str],
+      dpi: int
+   ) -> Optional[str]:
+      """
+      Plot 2: Ridge/Joy plot showing score distributions by job shape.
+      """
+      # Define shape order for consistent display (aligned with queue structure)
+      shape_order = [
+         'Tiny/Short (≤2h)', 'Tiny/Full (2-6h)', 'Tiny/Overflow (>6h)',
+         'Small/Short (≤6h)', 'Small/Full (6-12h)',
+         'Medium/Short (≤12h)', 'Medium/Full (12-18h)',
+         'Large/Short (≤18h)', 'Large/Full (18-24h)'
+      ]
+
+      # Filter to shapes with data
+      available_shapes = df['job_shape'].unique()
+      shape_order = [s for s in shape_order if s in available_shapes]
+
+      if len(shape_order) < 2:
+         return None
+
+      # Create ridge plot
+      n_shapes = len(shape_order)
+      fig, axes = plt.subplots(n_shapes, 1, figsize=(12, 2 * n_shapes), sharex=True)
+
+      if n_shapes == 1:
+         axes = [axes]
+
+      # Color palette
+      colors = sns.color_palette('husl', n_colors=n_shapes)
+
+      # Global x-axis limits based on data
+      x_min = df['run_score'].quantile(0.01)
+      x_max = df['run_score'].quantile(0.99)
+
+      for idx, (shape, ax) in enumerate(zip(shape_order, axes)):
+         shape_data = df[df['job_shape'] == shape]['run_score'].dropna()
+
+         if len(shape_data) < 5:
+            ax.set_visible(False)
+            continue
+
+         # Plot KDE
+         try:
+            sns.kdeplot(
+               data=shape_data,
+               ax=ax,
+               fill=True,
+               color=colors[idx],
+               alpha=0.7,
+               linewidth=1.5
+            )
+         except Exception:
+            # Fallback to histogram if KDE fails
+            ax.hist(shape_data, bins=30, color=colors[idx], alpha=0.7, density=True)
+
+         # Add median line
+         median_score = shape_data.median()
+         ax.axvline(median_score, color='black', linestyle='--', linewidth=1.5, alpha=0.8)
+
+         # Label
+         ax.set_ylabel('')
+         ax.set_yticks([])
+         ax.text(
+            0.02, 0.5, f"{shape}\n(n={len(shape_data)}, med={median_score:.0f})",
+            transform=ax.transAxes,
+            fontsize=10,
+            verticalalignment='center'
+         )
+         ax.set_xlim(x_min, x_max)
+
+         # Only show x-axis on bottom plot
+         if idx < n_shapes - 1:
+            ax.set_xlabel('')
+
+      axes[-1].set_xlabel('Score at Run Time')
+      fig.suptitle('Run Score Distributions by Job Shape (Production Queues)', fontsize=14, y=1.01)
+
+      plt.tight_layout()
+
+      if save_dir:
+         path = os.path.join(save_dir, 'run_score_ridge.png')
+         fig.savefig(path, bbox_inches='tight', dpi=dpi)
+         plt.close(fig)
+         return path
+
+      plt.close(fig)
+      return None
+
+   def _plot_run_score_quantiles(
+      self,
+      df: pd.DataFrame,
+      save_dir: Optional[str],
+      dpi: int
+   ) -> Optional[str]:
+      """
+      Plot 3: Quantile regression lines showing score vs eligible time per job shape.
+      Shows median with 25th-75th percentile bands.
+      """
+      shape_order = [
+         'Tiny/Short (≤2h)', 'Tiny/Full (2-6h)', 'Tiny/Overflow (>6h)',
+         'Small/Short (≤6h)', 'Small/Full (6-12h)',
+         'Medium/Short (≤12h)', 'Medium/Full (12-18h)',
+         'Large/Short (≤18h)', 'Large/Full (18-24h)'
+      ]
+
+      # Filter to shapes with enough data
+      available_shapes = df['job_shape'].unique()
+      shape_order = [s for s in shape_order if s in available_shapes]
+
+      if not shape_order:
+         return None
+
+      # Create figure
+      fig, ax = plt.subplots(figsize=(14, 8))
+
+      # Color palette
+      colors = sns.color_palette('husl', n_colors=len(shape_order))
+
+      # Define eligible time bins for computing quantiles
+      max_elig = df['eligible_time_hours'].quantile(0.95)
+      elig_bins = np.linspace(0, max_elig, 20)
+      elig_centers = (elig_bins[:-1] + elig_bins[1:]) / 2
+
+      for idx, shape in enumerate(shape_order):
+         shape_df = df[df['job_shape'] == shape]
+
+         if len(shape_df) < 20:
+            continue
+
+         # Bin eligible time and compute quantiles
+         shape_df = shape_df.copy()
+         shape_df['elig_bin'] = pd.cut(
+            shape_df['eligible_time_hours'],
+            bins=elig_bins,
+            labels=elig_centers
+         )
+
+         # Compute quantiles per bin
+         quantiles = shape_df.groupby('elig_bin', observed=True)['run_score'].agg(
+            ['median', lambda x: x.quantile(0.25), lambda x: x.quantile(0.75), 'count']
+         )
+         quantiles.columns = ['median', 'q25', 'q75', 'count']
+         quantiles = quantiles[quantiles['count'] >= 3]  # Need at least 3 points per bin
+
+         if len(quantiles) < 3:
+            continue
+
+         x = quantiles.index.astype(float)
+
+         # Plot median line
+         ax.plot(
+            x, quantiles['median'],
+            color=colors[idx],
+            linewidth=2,
+            label=f"{shape} (n={len(shape_df)})"
+         )
+
+         # Plot confidence band
+         ax.fill_between(
+            x,
+            quantiles['q25'],
+            quantiles['q75'],
+            color=colors[idx],
+            alpha=0.2
+         )
+
+      ax.set_xlabel('Eligible Time (hours)', fontsize=12)
+      ax.set_ylabel('Score at Run Time', fontsize=12)
+      ax.set_title('Score vs Eligible Time by Job Shape (Production Queues)\nLines show median, bands show 25th-75th percentile', fontsize=14)
+      ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), fontsize=9)
+      ax.grid(True, alpha=0.3)
+
+      # Set reasonable axis limits
+      ax.set_xlim(0, max_elig)
+
+      plt.tight_layout()
+
+      if save_dir:
+         path = os.path.join(save_dir, 'run_score_quantiles.png')
+         fig.savefig(path, bbox_inches='tight', dpi=dpi)
+         plt.close(fig)
+         return path
+
+      plt.close(fig)
+      return None
+
