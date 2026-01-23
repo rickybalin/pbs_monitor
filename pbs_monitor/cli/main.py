@@ -13,6 +13,7 @@ from ..utils.logging_setup import setup_logging
 from ..data_collector import DataCollector
 from .commands import StatusCommand, JobsCommand, NodesCommand, QueuesCommand, DatabaseCommand, HistoryCommand, DaemonCommand, ReservationsCommand, ScoreFormulaCommand
 from .analyze_commands import AnalyzeCommand
+from ..replay.cli import ReplayCommand
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -802,6 +803,90 @@ Examples:
       help="Use logarithmic scale for y-axis in grid plot"
    )
 
+   # Replay command
+   replay_parser = subparsers.add_parser(
+      "replay",
+      help="Replay historical job timelines with split-panel display"
+   )
+   replay_parser.add_argument(
+      "--start",
+      help="Start time (ISO format like 2024-01-15 or relative like '24h ago')"
+   )
+   replay_parser.add_argument(
+      "--end",
+      help="End time (ISO format or 'now', default: now)"
+   )
+   replay_parser.add_argument(
+      "-u", "--user",
+      help="Filter by username"
+   )
+   replay_parser.add_argument(
+      "-q", "--queue",
+      help="Filter by queue name"
+   )
+   replay_parser.add_argument(
+      "-p", "--project",
+      help="Filter by project name"
+   )
+   replay_parser.add_argument(
+      "--output-format",
+      choices=["split-panel", "text", "timeline", "waffle"],
+      default="split-panel",
+      help="Output format (default: split-panel)"
+   )
+   replay_parser.add_argument(
+      "--step",
+      default="1h",
+      help="Time step for stepping/animation (e.g., '5m', '1h', default: 1h)"
+   )
+   replay_parser.add_argument(
+      "--top-n",
+      type=int,
+      default=None,
+      help="Number of jobs to show per panel. If not set, auto-sizes to fit terminal height."
+   )
+   replay_parser.add_argument(
+      "--live",
+      action="store_true",
+      help="Live mode: continuously update display"
+   )
+   # Waffle chart options
+   replay_parser.add_argument(
+      "--color-by",
+      choices=["job", "user", "queue", "project", "allocation"],
+      default="queue",
+      help="How to color the waffle chart (default: queue)"
+   )
+   replay_parser.add_argument(
+      "--grid-rows",
+      type=int,
+      default=72,
+      help="Number of rows in waffle grid (default: 72)"
+   )
+   replay_parser.add_argument(
+      "--grid-cols",
+      type=int,
+      default=144,
+      help="Number of columns in waffle grid (default: 144)"
+   )
+   replay_parser.add_argument(
+      "--small-job-threshold",
+      type=int,
+      default=None,
+      help="Node threshold for bundling small jobs in 'job' color mode (default: nodes per cell)"
+   )
+   replay_parser.add_argument(
+      "--output-dir",
+      default=".",
+      help="Output directory for waffle chart frames and GIF"
+   )
+   replay_parser.add_argument(
+      "--frame-duration",
+      type=int,
+      default=1000,
+      help="Duration of each frame in GIF in milliseconds (default: 1000)"
+   )
+
    # Config command
    config_parser = subparsers.add_parser(
       "config",
@@ -1143,6 +1228,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
       elif args.command == "score-formula":
          cmd = ScoreFormulaCommand(collector, config)
+         return cmd.execute(args)
+
+      elif args.command == "replay":
+         cmd = ReplayCommand(collector, config)
          return cmd.execute(args)
 
       else:
