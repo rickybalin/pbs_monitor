@@ -1,77 +1,177 @@
 # Quick Start
 
-This guide helps you install PBS Monitor, initialize the database, and run the first commands.
+This guide covers installation, setup, and basic usage of PBS Monitor.
 
-## Install
+## Installation
 
 ```bash
 git clone https://github.com/jtchilders/pbs_monitor.git
 cd pbs_monitor
-pip install -r requirements.txt
+
+# Create and activate a virtual environment (recommended)
+python -m venv venv
+source venv/bin/activate
+
+# Install (dependencies are installed automatically)
 pip install -e .
 ```
 
-Prerequisites:
-- Python 3.8+
-- PBS Pro or OpenPBS installed
-- PBS commands (`qstat`, `qsub`, `pbsnodes`, etc.) in PATH
+**Requirements:** Python 3.8+, PBS commands (`qstat`, `pbsnodes`) in PATH.
 
-## Initialize Database
+## Setup
+
+### Create Configuration
 
 ```bash
-# Create database (SQLite by default)
-pbs-monitor database init
-
-# Verify
-pbs-monitor database status
-pbs-monitor database validate
+pbs-monitor config --create   # Creates ~/.pbs_monitor.yaml
 ```
 
-## First Commands
+### Initialize Database
+
+```bash
+pbs-monitor database init      # Creates database (default: ~/.pbs_monitor.db)
+```
+
+**Note:** The default database location is `~/.pbs_monitor.db`. On large systems this file can grow significantly. Edit `~/.pbs_monitor.yaml` to place it on project space before running `database init`.
+
+## Basic Commands
 
 ```bash
 # System status
 pbs-monitor status
 
-# Jobs (all / by user)
-pbs-monitor jobs
-pbs-monitor jobs -u myuser
+# Jobs
+pbs-monitor jobs                # All jobs
+pbs-monitor jobs -u myuser      # Filter by user
+pbs-monitor jobs -s R           # Filter by state (Running)
+pbs-monitor jobs -q prod        # Filter by queue
 
-# Nodes / Queues
-pbs-monitor nodes                 # Show all nodes
-pbs-monitor nodes node1 node2     # Show specific nodes only
+# Nodes and queues
+pbs-monitor nodes
 pbs-monitor queues
+
+# Historical jobs from database
+pbs-monitor history
+pbs-monitor history -u myuser -d 7   # Last 7 days for user
 ```
 
-## Collect Data On Demand
+## Collecting Data
+
+### On-Demand Collection
+
+Persist data to the database while viewing:
 
 ```bash
-# Persist data to the database while viewing
 pbs-monitor status --collect
 pbs-monitor jobs --collect
 pbs-monitor nodes --collect
-pbs-monitor queues --collect
 ```
 
-## Daemon (optional)
+### Background Daemon
+
+For continuous collection:
 
 ```bash
-# Foreground (testing)
+# Start in background
 pbs-monitor daemon start
 
-# Background (production)
-pbs-monitor daemon start --detach
-
-# Status / Stop
+# Check status
 pbs-monitor daemon status
+
+# Stop
 pbs-monitor daemon stop
+```
+
+The daemon periodically collects job, node, and queue data to the database.
+
+## Configuration
+
+Configuration files are searched in order:
+1. `~/.pbs_monitor.yaml`
+2. `~/.config/pbs_monitor/config.yaml`
+3. `/etc/pbs_monitor/config.yaml`
+4. `pbs_monitor.yaml` (current directory)
+
+### Example Configuration
+
+```yaml
+database:
+  url: "sqlite:////project/myproject/pbs_monitor.db"  # Note: 4 slashes for absolute path
+  pool_size: 5
+  daemon_enabled: true
+  job_collection_interval: 900      # 15 minutes
+  node_collection_interval: 1800    # 30 minutes
+  queue_collection_interval: 3600   # 60 minutes
+
+display:
+  use_colors: true
+  max_table_width: 120
+
+logging:
+  level: INFO
+```
+
+### Environment Override
+
+```bash
+export PBS_MONITOR_DB_URL="sqlite:////path/to/database.db"
+```
+
+## Database Management
+
+```bash
+# Check status
+pbs-monitor database status
+
+# Validate schema
+pbs-monitor database validate
+
+# Backup (SQLite only)
+pbs-monitor database backup /path/to/backup.db
+
+# Clean up old data
+pbs-monitor database cleanup --job-history-days 365 --snapshot-days 90
+```
+
+## Analytics
+
+```bash
+# Find job shapes that can run immediately
+pbs-monitor analyze run-now
+
+# Top users/projects by node-hours
+pbs-monitor analyze leaderboard -d 30
+
+# Walltime efficiency
+pbs-monitor analyze walltime-efficiency-by-user -d 7
+
+# Usage insights with plots
+pbs-monitor analyze usage-insights -d 30 -o ./plots
+```
+
+## Visualization
+
+```bash
+# Replay historical job timelines
+pbs-monitor replay --start "24h ago" --output-format split-panel
+
+# PBS scoring formula analysis
+pbs-monitor score-formula --plot --output-dir ./plots
+```
+
+## Development
+
+```bash
+# Run tests
+pytest
+pytest --cov=pbs_monitor
+
+# Code formatting
+black pbs_monitor/
+flake8 pbs_monitor/
 ```
 
 ## Next Steps
 
-- Configuration: `user/configuration.md`
-- Database guide: `user/database.md`
-- Daemon & deployment: `user/daemon_and_deployment.md`
-- CLI reference: `user/cli_reference.md`
-
-
+- Full CLI reference: `cli_reference.md`
+- Database relocation guide: `database_relocation.md`

@@ -1,397 +1,431 @@
 # CLI Reference
-This page is generated from `pbs-monitor --help` and subcommand help outputs.
 
-## Global Help
+Generated from `pbs-monitor --help` output.
+
+## Global Options
 
 ```
-usage: pbs-monitor [-h] [-c CONFIG] [-v] [-q] [--log-file LOG_FILE]
-                   [--use-sample-data] [--max-width MAX_WIDTH] [--auto-width]
-                   [--no-expand] [--wrap]
-                   {status,jobs,nodes,queues,resv,reservations,reserv,history,analyze,config,database,daemon} ...
-
-PBS scheduler monitoring and management tools
-
-Configuration file locations (searched in order):
-  ~/.pbs_monitor.yaml
-  ~/.config/pbs_monitor/config.yaml
-  /etc/pbs_monitor/config.yaml
-  pbs_monitor.yaml (current directory)
-
-Many command options (columns, display settings, etc.) can be configured in the config file.
-
-positional arguments:
-  {status,jobs,nodes,queues,resv,reservations,reserv,history,analyze,config,database,daemon}
-                        Available commands
-    status              Show PBS system status
-    jobs                Show job information
-    nodes               Show node information
-    queues              Show queue information
-    resv (reservations, reserv)
-                        Reservation information and management
-    history             Show historical job information from database
-    analyze             Analytics and analysis commands
-    config              Configuration management
-    database            Database management
-    daemon              Background data collection daemon management
-
-options:
-  -h, --help            show this help message and exit
-  -c, --config CONFIG   Configuration file path
-  -v, --verbose         Enable verbose logging
-  -q, --quiet           Suppress normal output
-  --log-file LOG_FILE   Log file path
-  --use-sample-data     Use sample JSON data instead of actual PBS commands
-                        (for testing)
-  --max-width MAX_WIDTH
-                        Maximum table width (overrides config)
-  --auto-width          Auto-detect terminal width
-  --no-expand           Don't expand columns to fit content
-  --wrap                Enable word wrapping in table cells
-
-Examples:
-  pbs-monitor status              # Show system status
-  pbs-monitor jobs                # Show all jobs
-  pbs-monitor jobs -u myuser      # Show jobs for specific user
-  pbs-monitor history             # Show completed jobs from database
-  pbs-monitor history -u myuser   # Show user's completed jobs
-  pbs-monitor nodes               # Show all node information
-  pbs-monitor nodes node1 node2   # Show specific nodes only
-  pbs-monitor queues              # Show queue information
-  pbs-monitor config --create     # Create sample configuration
-      
+pbs-monitor [-h] [-c CONFIG] [-v] [-q] [--log-file LOG_FILE]
+            [--use-sample-data] [--max-width MAX_WIDTH] [--auto-width]
+            [--no-expand] [--wrap]
+            {status,jobs,nodes,queues,resv,history,analyze,score-formula,replay,config,database,daemon}
 ```
+
+| Option | Description |
+|--------|-------------|
+| `-c, --config` | Configuration file path |
+| `-v, --verbose` | Enable verbose logging |
+| `-q, --quiet` | Suppress normal output |
+| `--log-file` | Log file path |
+| `--use-sample-data` | Use sample JSON data for testing |
+| `--max-width` | Maximum table width |
+| `--auto-width` | Auto-detect terminal width |
+| `--no-expand` | Don't expand columns to fit content |
+| `--wrap` | Enable word wrapping in table cells |
+
+---
 
 ## status
 
-```
-usage: pbs-monitor status [-h] [-r] [--collect] [--queue-depth]
+Show PBS system status.
 
-options:
-  -h, --help     show this help message and exit
-  -r, --refresh  Force refresh of data
-  --collect      Collect and persist data to database after displaying
-  --queue-depth  Show detailed queue depth breakdown by job size
 ```
+pbs-monitor status [-r] [--collect] [--queue-depth]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-r, --refresh` | Force refresh of data |
+| `--collect` | Persist data to database |
+| `--queue-depth` | Show detailed queue depth breakdown by job size |
+
+---
 
 ## jobs
 
-```
-usage: pbs-monitor jobs [-h] [-u USER] [-s {R,Q,H,W,T,E,S,C,F}] [-r]
-                        [--columns COLUMNS] [--sort SORT] [--reverse]
-                        [--collect] [-d] [--history]
-                        [--format {table,detailed,json}] [--show-raw]
-                        [job_ids ...]
+Show job information.
 
-positional arguments:
-  job_ids               Specific job IDs to show details for (numerical
-                        portion only, e.g., 12345)
-
-options:
-  -h, --help            show this help message and exit
-  -u, --user USER       Filter by username
-  -s, --state {R,Q,H,W,T,E,S,C,F}
-                        Filter by job state
-  -r, --refresh         Force refresh of data
-  --columns COLUMNS     Comma-separated list of columns to display: job_id,
-                        name, owner, project, allocation, state, queue, nodes,
-                        ppn, walltime, walltime_actual, memory, submit_time,
-                        start_time, end_time, runtime, priority, cores, score,
-                        queue_time, exit_status, execution_node
-  --sort SORT           Column to sort by: job_id, name, owner, project,
-                        allocation, state, queue, nodes, ppn, walltime,
-                        priority, cores, score (default: score)
-  --reverse             Sort in ascending order (default is descending for
-                        score, ascending for others)
-  --collect             Collect and persist data to database after displaying
-  -d, --detailed        Show detailed information for specific jobs
-  --history             Include job history from database (for detailed view)
-  --format {table,detailed,json}
-                        Output format for job details (default: table)
-  --show-raw            Show raw PBS attributes (for detailed view)
 ```
+pbs-monitor jobs [-u USER] [-p PROJECT] [-q QUEUE] [-s STATE] [-r]
+                 [--columns COLUMNS] [--sort SORT] [--reverse] [--collect]
+                 [-d] [--history] [--format {table,detailed,json}] [--show-raw]
+                 [job_ids ...]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-u, --user` | Filter by username |
+| `-p, --project` | Filter by project name |
+| `-q, --queue` | Filter by queue name |
+| `-s, --state` | Filter by state: R, Q, H, W, T, E, S, C, F |
+| `-r, --refresh` | Force refresh of data |
+| `--columns` | Columns to display (comma-separated) |
+| `--sort` | Sort by column (default: score) |
+| `--reverse` | Reverse sort order |
+| `--collect` | Persist data to database |
+| `-d, --detailed` | Show detailed job info |
+| `--history` | Include job history from database |
+| `--format` | Output format: table, detailed, json |
+| `--show-raw` | Show raw PBS attributes |
+
+**Available columns:** job_id, name, owner, project, allocation, state, queue, nodes, ppn, walltime, walltime_actual, memory, submit_time, start_time, end_time, runtime, priority, cores, score, queue_time, exit_status, execution_node
+
+---
 
 ## nodes
 
-```
-usage: pbs-monitor nodes [-h] [node_ids ...]
-                         [-s {free,offline,down,busy,job-exclusive,job-sharing}]
-                         [-r] [--columns COLUMNS] [-d] [--collect]
+Show node information.
 
-positional arguments:
-  node_ids              Optional node IDs to filter by (space separated)
-
-options:
-  -h, --help            show this help message and exit
-  -s, --state {free,offline,down,busy,job-exclusive,job-sharing}
-                        Filter by node state
-  -r, --refresh         Force refresh of data
-  --columns COLUMNS     Comma-separated list of columns to display
-  -d, --detailed        Show detailed table format instead of summary
-  --collect             Collect and persist data to database after displaying
 ```
+pbs-monitor nodes [-s STATE] [-r] [--columns COLUMNS] [-d] [--collect] [node_ids ...]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-s, --state` | Filter by state: free, offline, down, busy, job-exclusive, etc. |
+| `-r, --refresh` | Force refresh of data |
+| `--columns` | Columns to display |
+| `-d, --detailed` | Show detailed table format |
+| `--collect` | Persist data to database |
+
+---
 
 ## queues
 
-```
-usage: pbs-monitor queues [-h] [-r] [--columns COLUMNS] [--collect]
+Show queue information.
 
-options:
-  -h, --help         show this help message and exit
-  -r, --refresh      Force refresh of data
-  --columns COLUMNS  Comma-separated list of columns to display
-  --collect          Collect and persist data to database after displaying
 ```
+pbs-monitor queues [-r] [--columns COLUMNS] [--collect]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-r, --refresh` | Force refresh of data |
+| `--columns` | Columns to display |
+| `--collect` | Persist data to database |
+
+---
 
 ## history
 
-```
-usage: pbs-monitor history [-h] [-u USER] [-d DAYS] [-s {C,F,E,all}]
-                           [--columns COLUMNS] [--sort SORT] [--reverse]
-                           [--limit LIMIT] [--include-pbs-history]
-
-options:
-  -h, --help            show this help message and exit
-  -u, --user USER       Filter by username
-  -d, --days DAYS       Number of days to look back (default: 30)
-  -s, --state {C,F,E,all}
-                        Filter by completion state: C (completed), F
-                        (finished), E (exiting), all (default: all)
-  --columns COLUMNS     Comma-separated list of columns to display: job_id,
-                        name, owner, project, allocation, state, queue, nodes,
-                        walltime, submit_time, start_time, end_time, queued,
-                        runtime, exit_status, cores
-  --sort SORT           Column to sort by: job_id, name, owner, project,
-                        allocation, state, queue, nodes, walltime,
-                        submit_time, start_time, end_time, queued, runtime
-                        (default: submit_time)
-  --reverse             Sort in reverse order
-  --limit LIMIT         Maximum number of jobs to show (default: 100)
-  --include-pbs-history
-                        Also include recent completed jobs from qstat -x
-```
-
-## database
+Show historical job information from database.
 
 ```
-usage: pbs-monitor database [-h]
-                            {init,migrate,status,validate,backup,restore,cleanup} ...
-
-positional arguments:
-  {init,migrate,status,validate,backup,restore,cleanup}
-                        Database management actions
-    init                Initialize database with fresh schema
-    migrate             Migrate database to latest schema
-    status              Show database status and information
-    validate            Validate database schema
-    backup              Create database backup
-    restore             Restore database from backup
-    cleanup             Clean up old data from database
-
-options:
-  -h, --help            show this help message and exit
+pbs-monitor history [-u USER] [-p PROJECT] [-d DAYS] [-s STATE]
+                    [--columns COLUMNS] [--sort SORT] [--reverse]
+                    [--limit LIMIT] [--include-pbs-history]
 ```
 
-### database init
+| Option | Description |
+|--------|-------------|
+| `-u, --user` | Filter by username |
+| `-p, --project` | Filter by project name |
+| `-d, --days` | Days to look back (default: 30) |
+| `-s, --state` | Filter by state: C, F, E, UNKNOWN_END, all |
+| `--columns` | Columns to display |
+| `--sort` | Sort column (default: submit_time) |
+| `--reverse` | Reverse sort order |
+| `--limit` | Max jobs to show (default: 100) |
+| `--include-pbs-history` | Include recent jobs from qstat -x |
 
-```
-usage: pbs-monitor database init [-h] [--force]
-
-options:
-  -h, --help  show this help message and exit
-  --force     Force initialization (drops existing tables)
-```
-
-### database migrate
-
-```
-usage: pbs-monitor database migrate [-h]
-
-options:
-  -h, --help  show this help message and exit
-```
-
-### database status
-
-```
-usage: pbs-monitor database status [-h]
-
-options:
-  -h, --help  show this help message and exit
-```
-
-### database validate
-
-```
-usage: pbs-monitor database validate [-h]
-
-options:
-  -h, --help  show this help message and exit
-```
-
-### database backup
-
-```
-usage: pbs-monitor database backup [-h] [backup_path]
-
-positional arguments:
-  backup_path  Backup file path (optional)
-
-options:
-  -h, --help   show this help message and exit
-```
-
-### database restore
-
-```
-usage: pbs-monitor database restore [-h] backup_path
-
-positional arguments:
-  backup_path  Backup file path to restore from
-
-options:
-  -h, --help   show this help message and exit
-```
-
-### database cleanup
-
-```
-usage: pbs-monitor database cleanup [-h] [--job-history-days JOB_HISTORY_DAYS]
-                                    [--snapshot-days SNAPSHOT_DAYS] [--force]
-
-options:
-  -h, --help            show this help message and exit
-  --job-history-days JOB_HISTORY_DAYS
-                        Keep job history for N days (default: 365)
-  --snapshot-days SNAPSHOT_DAYS
-                        Keep snapshots for N days (default: 90)
-  --force               Skip confirmation prompt
-```
-
-## daemon
-
-```
-usage: pbs-monitor daemon [-h] {start,stop,status} ...
-
-positional arguments:
-  {start,stop,status}  Daemon management actions
-    start              Start background data collection daemon
-    stop               Stop background data collection daemon
-    status             Show daemon status and recent collection activity
-
-options:
-  -h, --help           show this help message and exit
-```
-
-### daemon start
-
-```
-usage: pbs-monitor daemon start [-h] [--detach] [--pid-file PID_FILE]
-
-options:
-  -h, --help           show this help message and exit
-  --detach             Run daemon in background (detached mode)
-  --pid-file PID_FILE  PID file path (default: ~/.pbs_monitor_daemon.pid)
-```
-
-### daemon stop
-
-```
-usage: pbs-monitor daemon stop [-h] [--pid-file PID_FILE]
-
-options:
-  -h, --help           show this help message and exit
-  --pid-file PID_FILE  PID file path (default: ~/.pbs_monitor_daemon.pid)
-```
-
-### daemon status
-
-```
-usage: pbs-monitor daemon status [-h]
-
-options:
-  -h, --help  show this help message and exit
-```
+---
 
 ## resv
 
-```
-usage: pbs-monitor resv [-h] {list,show} ...
-
-positional arguments:
-  {list,show}  Reservation actions
-    list       List reservations
-    show       Show detailed reservation information
-
-options:
-  -h, --help   show this help message and exit
-```
+Reservation information and management.
 
 ### resv list
 
 ```
-usage: pbs-monitor resv list [-h] [-u USER] [-s STATE] [-r] [--collect]
-                             [--format {table,json}] [--columns COLUMNS]
-
-options:
-  -h, --help            show this help message and exit
-  -u, --user USER       Filter by user
-  -s, --state STATE     Filter by state
-  -r, --refresh         Force refresh of data
-  --collect             Collect data to database
-  --format {table,json}
-                        Output format
-  --columns COLUMNS     Comma-separated list of columns to display. Available:
-                        reservation_id, name, owner, state, type, start_time,
-                        end_time, duration, nodes, queue
+pbs-monitor resv list [-u USER] [-s STATE] [-r] [--collect] [--format {table,json}] [--columns COLUMNS]
 ```
 
 ### resv show
 
 ```
-usage: pbs-monitor resv show [-h] [--format {table,json,yaml}]
-                             [reservation_ids ...]
-
-positional arguments:
-  reservation_ids       Reservation IDs to show
-
-options:
-  -h, --help            show this help message and exit
-  --format {table,json,yaml}
-                        Output format
+pbs-monitor resv show [--format {table,json,yaml}] [--show-nodes] [reservation_ids ...]
 ```
+
+---
 
 ## analyze
 
-```
-usage: pbs-monitor analyze [-h]
-                           {run-score,walltime-efficiency-by-user,walltime-efficiency-by-project,reservation-utilization,reservation-trends,reservation-owner-ranking} ...
+Analytics and analysis commands.
 
-positional arguments:
-  {run-score,walltime-efficiency-by-user,walltime-efficiency-by-project,reservation-utilization,reservation-trends,reservation-owner-ranking}
-                        Analysis actions
-    run-score           Analyze job scores at queue → run transitions
-    walltime-efficiency-by-user
-                        Analyze walltime efficiency by user
-    walltime-efficiency-by-project
-                        Analyze walltime efficiency by project
-    reservation-utilization
-                        Analyze reservation utilization efficiency
-    reservation-trends  Analyze reservation utilization trends over time
-    reservation-owner-ranking
-                        Rank reservation owners by utilization efficiency
+### analyze run-now
 
-options:
-  -h, --help            show this help message and exit
+Suggest a job shape you can run immediately without delaying queued jobs.
+
 ```
+pbs-monitor analyze run-now [-b BUFFER_MINUTES] [--format {table,json}] [-r]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-b, --buffer-minutes` | Safety buffer in minutes (default: 8) |
+| `--format` | Output format |
+| `-r, --refresh` | Force refresh |
 
 ### analyze run-score
 
-```
-usage: pbs-monitor analyze run-score [-h] [-d DAYS] [--format {table,csv}]
+Analyze job scores at queue→run transitions.
 
-options:
-  -h, --help            show this help message and exit
-  -d, --days DAYS       Number of days to analyze (default: 30)
-  --format {table,csv}  Output format (default: table)
+```
+pbs-monitor analyze run-score [-d DAYS] [--format {table,csv}]
 ```
 
+### analyze walltime-efficiency-by-user
+
+Analyze walltime efficiency by user.
+
+```
+pbs-monitor analyze walltime-efficiency-by-user [-d DAYS] [-u USER] [--min-jobs MIN]
+                                                [-q QUEUE] [--min-nodes N] [--max-nodes N]
+                                                [--format {table,csv}]
+```
+
+### analyze walltime-efficiency-by-project
+
+Analyze walltime efficiency by project.
+
+```
+pbs-monitor analyze walltime-efficiency-by-project [-d DAYS] [--format {table,csv}]
+```
+
+### analyze leaderboard
+
+Show top users and projects by node-hours.
+
+```
+pbs-monitor analyze leaderboard [-d DAYS] [-w WEEKS] [-n TOP_N]
+                                [--min-node-hours MIN] [--include-running]
+                                [--include-queued] [--format {table,csv}]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-d, --days` | Days to analyze (default: 30) |
+| `-w, --weeks` | Weeks to analyze (shows weekly breakdown) |
+| `-n, --top-n` | Top entries to show (default: 10) |
+| `--include-running` | Include running jobs (default: True) |
+| `--include-queued` | Include queued jobs |
+
+### analyze usage-insights
+
+Usage insights with derived metrics and plots.
+
+```
+pbs-monitor analyze usage-insights [-d DAYS] [-m MIN_QUEUE_NODE_HOURS] [-n TOP_N_QUEUES]
+                                   [-R] [-a QUEUES...] [-x QUEUES...] [-o OUTPUT_DIR]
+                                   [-P] [-f {table,csv}] [-t {H,D,W}]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-d, --days` | Days to analyze (default: 30) |
+| `-m` | Min node-hours per queue (default: 100) |
+| `-n` | Limit to top-N queues |
+| `-R, --incl-resv` | Include reservation queues |
+| `-o, --output-dir` | Save plots to directory |
+| `-P, --no-plots` | Skip plot generation |
+| `-t, --ts-freq` | Time-series frequency: H, D, W |
+
+### analyze time-comparison
+
+Compare throughput and metrics between two time periods.
+
+```
+pbs-monitor analyze time-comparison --a-lower START --a-upper END
+                                    --b-lower START --b-upper END
+                                    [--group-by {queue,project,allocation_type}]
+                                    [--output-dir DIR] [--format {table,csv}]
+```
+
+### analyze reservation-utilization
+
+Analyze reservation utilization efficiency.
+
+```
+pbs-monitor analyze reservation-utilization [reservation_ids...] [--start-date DATE]
+                                            [--end-date DATE] [--format {table,csv,json}]
+                                            [--status STATUS] [-d DAYS]
+```
+
+### analyze reservation-trends
+
+Analyze reservation utilization trends over time.
+
+```
+pbs-monitor analyze reservation-trends [-d DAYS] [-o OWNER] [-q QUEUE]
+```
+
+### analyze reservation-owner-ranking
+
+Rank reservation owners by utilization efficiency.
+
+```
+pbs-monitor analyze reservation-owner-ranking [-d DAYS]
+```
+
+---
+
+## score-formula
+
+Display and explain the PBS job sort formula.
+
+```
+pbs-monitor score-formula [--raw] [--no-defaults] [-r] [--job-ids IDS...]
+                          [--plot] [--output-dir DIR] [--nodes N] [--walltime HH:MM:SS]
+                          [--project-priority N] [--sample-count N] [--max-time-hours N]
+                          [--plot-grid] [--grid-nodes N...] [--grid-walltimes N...]
+                          [--routing-queue QUEUE] [--log-scale]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--raw` | Show only raw formula string |
+| `--no-defaults` | Hide parameters table |
+| `--plot` | Generate score evolution plots |
+| `--plot-grid` | Generate grid plot of score components |
+| `--output-dir` | Directory to save plots |
+| `--sample-count` | Jobs to sample from queue (default: 6) |
+| `--max-time-hours` | Max eligible time to plot (default: 48) |
+| `--log-scale` | Use logarithmic y-axis |
+
+---
+
+## replay
+
+Replay historical job timelines with visualization.
+
+```
+pbs-monitor replay [--start START] [--end END] [-u USER] [-q QUEUE] [-p PROJECT]
+                   [--output-format {split-panel,text,timeline,waffle}]
+                   [--step STEP] [--top-n N] [--live]
+                   [--color-by {job,user,queue,project,allocation}]
+                   [--grid-rows N] [--grid-cols N] [--small-job-threshold N]
+                   [--output-dir DIR] [--frame-duration MS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--start` | Start time (ISO format or relative like '24h ago') |
+| `--end` | End time (default: now) |
+| `--output-format` | split-panel, text, timeline, or waffle |
+| `--step` | Time step (e.g., '5m', '1h', default: 1h) |
+| `--live` | Continuously update display |
+| `--color-by` | Waffle chart coloring |
+| `--output-dir` | Save waffle frames/GIF to directory |
+| `--frame-duration` | GIF frame duration in ms (default: 1000) |
+
+---
+
+## config
+
+Configuration management.
+
+```
+pbs-monitor config [--create] [--show]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--create` | Create sample configuration file |
+| `--show` | Show current configuration |
+
+---
+
+## database
+
+Database management.
+
+### database init
+
+```
+pbs-monitor database init [--force]
+```
+
+Initialize database. Use `--force` to drop existing tables.
+
+### database status
+
+```
+pbs-monitor database status
+```
+
+Show database information and table counts.
+
+### database validate
+
+```
+pbs-monitor database validate
+```
+
+Validate database schema.
+
+### database backup
+
+```
+pbs-monitor database backup [backup_path]
+```
+
+Create database backup (SQLite only).
+
+### database restore
+
+```
+pbs-monitor database restore <backup_path>
+```
+
+Restore database from backup.
+
+### database cleanup
+
+```
+pbs-monitor database cleanup [--job-history-days N] [--snapshot-days N] [--force]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--job-history-days` | Keep job history for N days (default: 365) |
+| `--snapshot-days` | Keep snapshots for N days (default: 90) |
+| `--force` | Skip confirmation prompt |
+
+### database show
+
+```
+pbs-monitor database show -t TABLE [-a AFTER] [-b BEFORE] [-s START] [-n NUM_ROWS] [--format {table,csv}]
+```
+
+Show table data. Use `-a N` for last N rows, `-b N` for first N rows, or `-s START -n NUM` for a range.
+
+---
+
+## daemon
+
+Background data collection daemon.
+
+### daemon start
+
+```
+pbs-monitor daemon start [--foreground] [--pid-file PATH]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--foreground, -f` | Run in foreground (don't detach) |
+| `--pid-file` | PID file path (default: ~/.pbs_monitor_daemon.pid) |
+
+### daemon stop
+
+```
+pbs-monitor daemon stop [--pid-file PATH]
+```
+
+### daemon status
+
+```
+pbs-monitor daemon status
+```
+
+Show daemon status and recent collection activity.
