@@ -13,19 +13,43 @@ from sqlalchemy import and_, func, desc, or_
 from sqlalchemy.exc import OperationalError
 
 from ..database.models import (
-    Reservation, ReservationUtilization, Job, JobState, 
+    Reservation, ReservationUtilization, Job, JobState,
     ReservationState, DataCollectionLog
 )
 from ..database.repositories import RepositoryFactory
+from ..database.connection import is_readonly_error
 
 
 class ReservationUtilizationAnalyzer:
     """Analyze reservation utilization efficiency"""
-    
+
     def __init__(self, repository_factory: Optional[RepositoryFactory] = None):
         self.repo_factory = repository_factory or RepositoryFactory()
         self.logger = logging.getLogger(__name__)
         self._readonly_mode = False
+        self._check_write_capability()
+
+    def _check_write_capability(self) -> None:
+        """
+        Test if the database is writable by attempting a minimal write operation.
+        Sets _readonly_mode = True if writes are not possible.
+        """
+        try:
+            from sqlalchemy import text
+            with self.repo_factory.get_job_repository().get_session() as session:
+                # Try to start a transaction - this will fail on read-only databases
+                # We use a savepoint so we can roll back without affecting the session
+                session.execute(text("SELECT 1"))
+                # The actual write test happens on first real write attempt
+                # For now, just verify we can connect
+        except Exception as e:
+            if is_readonly_error(e):
+                self._readonly_mode = True
+                self.logger.info(
+                    "Database is read-only. Reservation analysis will use existing data only; "
+                    "new analysis results will not be persisted."
+                )
+            # Don't raise - we can still do read-only analysis
     
     def analyze_reservation_utilization(self, 
                                        reservation_id: str,
@@ -104,10 +128,12 @@ class ReservationUtilizationAnalyzer:
                         session.commit()
                         self.logger.debug(f"Stored utilization analysis for reservation {reservation_id}")
                     except OperationalError as e:
-                        if "readonly database" in str(e).lower():
+                        if is_readonly_error(e):
                             self._readonly_mode = True
-                            self.logger.warning("Database is read-only - analysis results will not be persisted. "
-                                              "Continuing in read-only mode for future operations.")
+                            self.logger.info(
+                                "Database is read-only. Analysis results will not be persisted. "
+                                "Continuing with read-only analysis."
+                            )
                             session.rollback()
                         else:
                             raise

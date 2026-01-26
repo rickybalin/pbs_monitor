@@ -8,7 +8,10 @@ from .models import (
     Job, Queue, Node, JobHistory, QueueSnapshot, NodeSnapshot, 
     SystemSnapshot, DataCollectionLog, JobState, QueueState, NodeState, DataCollectionStatus
 )
-from .connection import DatabaseManager, get_database_manager, create_tables, drop_tables
+from .connection import (
+    DatabaseManager, get_database_manager, create_tables, drop_tables,
+    ReadOnlyDatabaseError, is_readonly_error
+)
 from .repositories import (
     JobRepository, QueueRepository, NodeRepository, 
     SystemRepository, DataCollectionRepository, RepositoryFactory
@@ -28,6 +31,7 @@ __all__ = [
     
     # Connection
     'DatabaseManager', 'get_database_manager', 'create_tables', 'drop_tables',
+    'ReadOnlyDatabaseError', 'is_readonly_error',
     
     # Repositories
     'JobRepository', 'QueueRepository', 'NodeRepository', 

@@ -11,16 +11,71 @@ from contextlib import contextmanager
 from typing import Dict, Optional, Any, Generator
 from pathlib import Path
 
-from sqlalchemy import create_engine, MetaData, inspect
+from sqlalchemy import create_engine, MetaData, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
+from sqlalchemy.exc import OperationalError
 
 from .models import Base
 from ..config import Config
 from ..utils.logging_setup import create_pbs_logger
 
 logger = create_pbs_logger(__name__)
+
+
+class ReadOnlyDatabaseError(Exception):
+    """
+    Exception raised when a write operation is attempted on a read-only database.
+
+    This typically occurs when:
+    - The SQLite database file has read-only permissions
+    - The user doesn't have write access to the database file
+    - The database is on a read-only filesystem
+    """
+
+    def __init__(self, message: str = None, original_error: Exception = None):
+        self.original_error = original_error
+        if message is None:
+            message = self._get_default_message()
+        super().__init__(message)
+
+    def _get_default_message(self) -> str:
+        return (
+            "Database is read-only. Write operations are not permitted.\n\n"
+            "This can happen when:\n"
+            "  - You don't have write permission to the database file\n"
+            "  - The database file is owned by another user\n"
+            "  - The database is on a read-only filesystem\n\n"
+            "If you need read-only access, commands like 'jobs', 'nodes', 'queues', \n"
+            "'history', and 'analyze' will still work for viewing data.\n\n"
+            "To enable writes, either:\n"
+            "  - Ask the database owner to grant write permissions\n"
+            "  - Create your own database: pbs-monitor config --create && pbs-monitor database init\n"
+            "  - Set PBS_MONITOR_DB_URL to point to your own database file"
+        )
+
+
+def is_readonly_error(error: Exception) -> bool:
+    """
+    Check if an exception indicates a read-only database error.
+
+    Args:
+        error: The exception to check
+
+    Returns:
+        True if the error indicates a read-only database
+    """
+    error_str = str(error).lower()
+    readonly_indicators = [
+        'readonly database',
+        'read-only database',
+        'attempt to write a readonly database',
+        'database is locked',  # Can happen with permission issues
+        'permission denied',
+        'read only',
+    ]
+    return any(indicator in error_str for indicator in readonly_indicators)
 
 class DatabaseManager:
     """
