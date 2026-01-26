@@ -3323,12 +3323,14 @@ class ScoreFormulaCommand(BaseCommand):
       # Generate plot types
       outputs = {}
 
+      # Generate queue-aware score vs time plots (server defaults + per-queue)
       try:
-         result = self._plot_score_vs_time(configs, formula, server_defaults, args, output_dir)
+         self.console.print("[bold]Score vs Time plots (by queue):[/bold]")
+         result = self._plot_score_vs_time_by_queue(formula, server_defaults, args, output_dir)
          outputs.update(result)
       except Exception as e:
-         self.logger.warning(f"Plot score_vs_time failed: {e}")
-         print(f"  Warning: Score vs Time plot failed: {e}")
+         self.logger.warning(f"Plot score_vs_time_by_queue failed: {e}")
+         print(f"  Warning: Score vs Time (by queue) plots failed: {e}")
 
       try:
          result = self._plot_score_heatmap(formula, server_defaults, args, output_dir)
@@ -3350,6 +3352,14 @@ class ScoreFormulaCommand(BaseCommand):
       except Exception as e:
          self.logger.warning(f"Plot walltime_cost failed: {e}")
          print(f"  Warning: Walltime cost plot failed: {e}")
+
+      try:
+         sample_count = getattr(args, 'sample_count', 10)
+         result = self._plot_sampled_jobs_score_vs_time(formula, server_defaults, args, output_dir, sample_count)
+         outputs.update(result)
+      except Exception as e:
+         self.logger.warning(f"Plot sampled_jobs_score_vs_time failed: {e}")
+         print(f"  Warning: Sampled jobs score vs time plot failed: {e}")
 
       # Display saved plot paths
       if outputs:
@@ -3499,7 +3509,11 @@ class ScoreFormulaCommand(BaseCommand):
    def _plot_score_vs_time(self, configs: List[Dict[str, Any]], formula: str,
                            server_defaults: Dict[str, Any], args: argparse.Namespace,
                            output_dir: str) -> Dict[str, str]:
-      """Plot 1: Score vs eligible time for different configurations"""
+      """Plot 1: Score vs eligible time for different configurations
+
+      This is the legacy single-plot version. See _plot_score_vs_time_by_queue
+      for the newer queue-aware multi-plot version.
+      """
       import matplotlib.pyplot as plt
       import numpy as np
 
@@ -3545,6 +3559,770 @@ class ScoreFormulaCommand(BaseCommand):
       plt.close(fig)
 
       return {'score_vs_time': path}
+
+   def _get_standard_job_shapes(self) -> List[Dict[str, Any]]:
+      """Get the standard set of job shapes for score vs time plots.
+
+      Returns a list of job shape configurations with node counts and walltimes.
+      Each shape includes metadata for color grouping and legend generation.
+      """
+      shapes = []
+
+      # Define node count groups with their walltimes
+      # Format: (node_count, list_of_walltime_hours)
+      node_groups = [
+         (1, [1]),                          # 1 node: only 1hr
+         (32, [1, 3, 6, 12, 24]),           # 32 nodes: 1-24hr
+         (128, [1, 3, 6, 12, 24]),          # 128 nodes: 1-24hr
+         (512, [1, 3, 6, 12, 24]),          # 512 nodes: 1-24hr
+         (1024, [1, 3, 6, 12, 24]),         # 1024 nodes: 1-24hr
+         (4096, [1, 3, 6, 12, 24]),         # 4096 nodes: 1-24hr
+         (8192, [1, 3, 6, 12, 24]),         # 8192 nodes: 1-24hr
+      ]
+
+      for node_count, walltimes in node_groups:
+         for wt in walltimes:
+            shapes.append({
+               'nodect': node_count,
+               'walltime_hours': wt,
+               'walltime_seconds': wt * 3600,
+               'project_priority': 1,
+               'node_group_index': len([ng for ng in node_groups if ng[0] <= node_count]) - 1,
+               'walltime_index': walltimes.index(wt),
+               'num_walltimes': len(walltimes),
+            })
+
+      return shapes
+
+   def _get_node_group_colors(self) -> List[str]:
+      """Get base colors for each node count group.
+
+      Returns 7 distinct colors for the 7 node count groups.
+      """
+      # Use a colorblind-friendly palette with good distinction
+      return [
+         '#1f77b4',  # Blue - 1 node
+         '#ff7f0e',  # Orange - 32 nodes
+         '#2ca02c',  # Green - 128 nodes
+         '#d62728',  # Red - 512 nodes
+         '#9467bd',  # Purple - 1024 nodes
+         '#8c564b',  # Brown - 4096 nodes
+         '#e377c2',  # Pink - 8192 nodes
+      ]
+
+   def _get_walltime_shade(self, base_color: str, walltime_index: int, num_walltimes: int) -> str:
+      """Get a shade of the base color based on walltime position.
+
+      Lighter shades for shorter walltimes, darker for longer.
+
+      Args:
+         base_color: Hex color string (e.g., '#1f77b4')
+         walltime_index: Index of this walltime in the group (0 = shortest)
+         num_walltimes: Total number of walltimes in the group
+
+      Returns:
+         Hex color string with adjusted brightness
+      """
+      import colorsys
+
+      # Parse hex color to RGB
+      hex_color = base_color.lstrip('#')
+      r, g, b = tuple(int(hex_color[i:i+2], 16) / 255.0 for i in (0, 2, 4))
+
+      # Convert to HLS (Hue, Lightness, Saturation)
+      h, l, s = colorsys.rgb_to_hls(r, g, b)
+
+      if num_walltimes == 1:
+         # Single walltime, use base color
+         return base_color
+
+      # Adjust lightness: 0.7 (light) for shortest walltime to 0.3 (dark) for longest
+      # Map walltime_index from [0, num_walltimes-1] to [0.65, 0.35] lightness range
+      min_lightness = 0.35
+      max_lightness = 0.65
+      lightness_range = max_lightness - min_lightness
+      l_new = max_lightness - (walltime_index / (num_walltimes - 1)) * lightness_range
+
+      # Convert back to RGB
+      r_new, g_new, b_new = colorsys.hls_to_rgb(h, l_new, s)
+
+      # Convert to hex
+      return '#{:02x}{:02x}{:02x}'.format(
+         int(r_new * 255), int(g_new * 255), int(b_new * 255)
+      )
+
+   def _generate_legend_label(self, node_count: int, walltimes: List[int]) -> str:
+      """Generate legend label for a node count group.
+
+      Args:
+         node_count: Number of nodes
+         walltimes: List of walltime hours in this group
+
+      Returns:
+         Label string like "32 nodes (1-24hr)" or "1 node (1hr)"
+      """
+      node_word = "node" if node_count == 1 else "nodes"
+
+      if len(walltimes) == 1:
+         return f"{node_count} {node_word} ({walltimes[0]}hr)"
+      else:
+         return f"{node_count} {node_word} ({min(walltimes)}-{max(walltimes)}hr)"
+
+   def _plot_score_vs_time_single(
+      self,
+      formula: str,
+      defaults: Dict[str, Any],
+      job_shapes: List[Dict[str, Any]],
+      title: str,
+      output_path: str,
+      args: argparse.Namespace
+   ) -> str:
+      """Generate a single score vs time plot with the given job shapes.
+
+      Args:
+         formula: The PBS job_sort_formula string
+         defaults: Merged defaults dict (server + queue)
+         job_shapes: List of job shape dicts to plot
+         title: Plot title
+         output_path: Full path for output PNG
+         args: CLI arguments (for max_time_hours, log_scale, etc.)
+
+      Returns:
+         Path to the generated plot
+      """
+      import matplotlib.pyplot as plt
+      import numpy as np
+
+      max_time_hours = getattr(args, 'max_time_hours', 48.0)
+      use_log_scale = getattr(args, 'log_scale', False)
+
+      # Create time array
+      time_hours = np.linspace(0.1, max_time_hours, 200)
+      time_seconds = time_hours * 3600
+
+      fig, ax = plt.subplots(figsize=(14, 8))
+
+      # Get colors
+      base_colors = self._get_node_group_colors()
+
+      # Group shapes by node count for legend
+      from collections import OrderedDict
+      node_groups = OrderedDict()
+      for shape in job_shapes:
+         nodect = shape['nodect']
+         if nodect not in node_groups:
+            node_groups[nodect] = []
+         node_groups[nodect].append(shape)
+
+      # Track legend handles (one per node group)
+      legend_handles = []
+      legend_labels = []
+
+      # Plot each job shape
+      for shape in job_shapes:
+         nodect = shape['nodect']
+         walltime_seconds = shape['walltime_seconds']
+         node_group_index = shape['node_group_index']
+         walltime_index = shape['walltime_index']
+         num_walltimes = shape['num_walltimes']
+
+         # Get color for this line
+         base_color = base_colors[node_group_index]
+         line_color = self._get_walltime_shade(base_color, walltime_index, num_walltimes)
+
+         # Calculate scores
+         scores = []
+         for t in time_seconds:
+            score = self._evaluate_formula(
+               formula,
+               nodect=nodect,
+               walltime_seconds=walltime_seconds,
+               eligible_time_seconds=t,
+               project_priority=shape['project_priority'],
+               server_defaults=defaults
+            )
+            scores.append(score)
+
+         # Plot the line
+         line, = ax.plot(time_hours, scores, color=line_color, linewidth=1.5, solid_capstyle='round')
+
+         # Track first line of each node group for legend
+         if walltime_index == 0:
+            legend_handles.append(line)
+            walltimes_in_group = [s['walltime_hours'] for s in node_groups[nodect]]
+            legend_labels.append(self._generate_legend_label(nodect, walltimes_in_group))
+
+      # Set up axes
+      ax.set_xlabel('Eligible Time (hours)', fontsize=12)
+      ax.set_ylabel('Score', fontsize=12)
+      ax.set_title(title, fontsize=14, fontweight='bold')
+
+      if use_log_scale:
+         ax.set_yscale('log')
+
+      # Add legend
+      ax.legend(
+         legend_handles, legend_labels,
+         loc='upper left', bbox_to_anchor=(1.02, 1),
+         borderaxespad=0, fontsize=10, frameon=True
+      )
+
+      ax.grid(True, alpha=0.3)
+
+      # Add annotation about what's being shown
+      enabled_components = []
+      if defaults.get('enable_wfp', 0):
+         enabled_components.append('WFP')
+      if defaults.get('enable_backfill', 0):
+         enabled_components.append('Backfill')
+      if defaults.get('enable_fifo', 0):
+         enabled_components.append('FIFO')
+      if defaults.get('base_score', 0):
+         enabled_components.insert(0, f"Base={defaults.get('base_score')}")
+
+      components_str = ', '.join(enabled_components) if enabled_components else 'None configured'
+      ax.annotate(
+         f"Active components: {components_str}",
+         xy=(0.02, 0.02), xycoords='axes fraction',
+         fontsize=9, color='gray'
+      )
+
+      plt.tight_layout()
+      fig.savefig(output_path, bbox_inches='tight', dpi=120)
+      plt.close(fig)
+
+      return output_path
+
+   def _plot_score_vs_time_by_queue(
+      self,
+      formula: str,
+      server_defaults: Dict[str, Any],
+      args: argparse.Namespace,
+      output_dir: str
+   ) -> Dict[str, str]:
+      """Generate a single score vs time plot with shaded envelopes for each queue.
+
+      Creates a unified plot showing the score envelope (min to max possible scores)
+      for each queue, including prod-fed queues and debug queues.
+
+      The envelope for each queue is bounded by:
+      - Maximum score curve: max nodes + min walltime
+      - Minimum score curve: min nodes + max walltime
+
+      Args:
+         formula: The PBS job_sort_formula string
+         server_defaults: Server-level resource defaults
+         args: CLI arguments
+         output_dir: Directory for output files
+
+      Returns:
+         Dict mapping plot names to file paths
+      """
+      import os
+      import matplotlib.pyplot as plt
+      import numpy as np
+
+      outputs = {}
+
+      # Get queue configs for prod-fed queues + debug queues
+      queue_configs = self._get_target_queue_configs()
+
+      if not queue_configs:
+         self.console.print("  [yellow]No target queues detected, skipping envelope plot[/yellow]")
+         return outputs
+
+      self.console.print(f"  [dim]Generating envelope plot for {len(queue_configs)} queues...[/dim]")
+
+      # Set up time array
+      max_time_hours = getattr(args, 'max_time_hours', 48.0)
+      time_hours = np.linspace(0.1, max_time_hours, 200)
+      time_seconds = time_hours * 3600
+
+      # Create figure
+      fig, ax = plt.subplots(figsize=(14, 9))
+
+      # Color palette for queues (colorblind-friendly)
+      queue_colors = [
+         '#1f77b4',  # Blue
+         '#ff7f0e',  # Orange
+         '#2ca02c',  # Green
+         '#d62728',  # Red
+         '#9467bd',  # Purple
+         '#8c564b',  # Brown
+         '#e377c2',  # Pink
+         '#7f7f7f',  # Gray
+         '#bcbd22',  # Olive
+         '#17becf',  # Cyan
+      ]
+
+      legend_handles = []
+      legend_labels = []
+
+      for idx, qc in enumerate(queue_configs):
+         queue_name = qc['name']
+         color = queue_colors[idx % len(queue_colors)]
+
+         # Merge queue defaults with server defaults
+         queue_defaults = {**server_defaults, **qc.get('defaults', {})}
+
+         # Get queue bounds
+         min_nodes = qc.get('min_nodes', 1)
+         max_nodes = qc.get('max_nodes', 10000)
+         min_walltime_hours = qc.get('min_walltime_hours') or 1.0
+         max_walltime_hours = qc.get('max_walltime_hours') or 24.0
+
+         # Handle infinity for max_nodes
+         if max_nodes == float('inf') or max_nodes > 10000:
+            max_nodes = 10000  # Cap for visualization
+
+         # Calculate max score curve: max nodes + min walltime (best case)
+         max_scores = []
+         for t in time_seconds:
+            score = self._evaluate_formula(
+               formula,
+               nodect=int(max_nodes),
+               walltime_seconds=min_walltime_hours * 3600,
+               eligible_time_seconds=t,
+               project_priority=1,
+               server_defaults=queue_defaults
+            )
+            max_scores.append(score)
+         max_scores = np.array(max_scores)
+
+         # Calculate min score curve: min nodes + max walltime (worst case)
+         min_scores = []
+         for t in time_seconds:
+            score = self._evaluate_formula(
+               formula,
+               nodect=int(min_nodes),
+               walltime_seconds=max_walltime_hours * 3600,
+               eligible_time_seconds=t,
+               project_priority=1,
+               server_defaults=queue_defaults
+            )
+            min_scores.append(score)
+         min_scores = np.array(min_scores)
+
+         # Plot shaded envelope
+         ax.fill_between(time_hours, min_scores, max_scores,
+                        alpha=0.25, color=color, linewidth=0)
+
+         # Plot boundary lines
+         line_max, = ax.plot(time_hours, max_scores, color=color, linewidth=1.5,
+                            linestyle='-', alpha=0.9)
+         ax.plot(time_hours, min_scores, color=color, linewidth=1.5,
+                linestyle='--', alpha=0.9)
+
+         # Build legend entry
+         legend_handles.append(line_max)
+         node_range = f"{min_nodes}-{max_nodes}" if min_nodes != max_nodes else str(min_nodes)
+         wt_range = f"{min_walltime_hours:.0f}-{max_walltime_hours:.0f}hr"
+         legend_labels.append(f"{queue_name} ({node_range}n, {wt_range})")
+
+      # Set up axes
+      ax.set_xlabel('Eligible Time (hours)', fontsize=12)
+      ax.set_ylabel('Score', fontsize=12)
+      ax.set_title('PBS Job Score Envelopes by Queue\n(Shaded region shows min-max score range for each queue)',
+                  fontsize=14, fontweight='bold')
+
+      # Add legend
+      ax.legend(
+         legend_handles, legend_labels,
+         loc='upper left', bbox_to_anchor=(1.02, 1),
+         borderaxespad=0, fontsize=9, frameon=True,
+         title='Queue (nodes, walltime)'
+      )
+
+      ax.grid(True, alpha=0.3)
+
+      # Apply log scale if requested
+      use_log_scale = getattr(args, 'log_scale', False)
+      if use_log_scale:
+         ax.set_yscale('log')
+
+      # Add annotation about line styles
+      ax.annotate(
+         'Solid line = max score (max nodes, min walltime)\n'
+         'Dashed line = min score (min nodes, max walltime)',
+         xy=(0.02, 0.02), xycoords='axes fraction',
+         fontsize=9, color='gray',
+         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8)
+      )
+
+      plt.tight_layout()
+      path = os.path.join(output_dir, 'score_vs_time_envelopes.png')
+      fig.savefig(path, bbox_inches='tight', dpi=120)
+      plt.close(fig)
+
+      outputs['score_vs_time_envelopes'] = path
+      return outputs
+
+   def _plot_sampled_jobs_score_vs_time(
+      self,
+      formula: str,
+      server_defaults: Dict[str, Any],
+      args: argparse.Namespace,
+      output_dir: str,
+      sample_count: int = 10
+   ) -> Dict[str, str]:
+      """Generate a score vs time plot for randomly sampled jobs from production queues.
+
+      Samples N jobs from the production queues and plots their individual score
+      functions over time, using each job's actual parameters (nodes, walltime,
+      project_priority, queue-specific defaults).
+
+      Args:
+         formula: The PBS job_sort_formula string
+         server_defaults: Server-level resource defaults
+         args: CLI arguments
+         output_dir: Directory for output files
+         sample_count: Number of jobs to sample (default 10)
+
+      Returns:
+         Dict mapping plot names to file paths
+      """
+      import os
+      import random
+      import matplotlib.pyplot as plt
+      import numpy as np
+      from collections import defaultdict
+
+      outputs = {}
+
+      self.console.print(f"  [dim]Sampling {sample_count} jobs from production queues...[/dim]")
+
+      # Get all queued jobs
+      try:
+         jobs = self.collector.get_jobs()
+         queued_jobs = [j for j in jobs if j.state.value == 'Q']
+      except Exception as e:
+         self.logger.warning(f"Failed to get jobs: {e}")
+         self.console.print(f"  [yellow]Could not fetch jobs: {e}[/yellow]")
+         return outputs
+
+      if not queued_jobs:
+         self.console.print("  [yellow]No queued jobs found, skipping sampled jobs plot[/yellow]")
+         return outputs
+
+      # Get target queue names (prod-fed + debug queues)
+      target_queue_configs = self._get_target_queue_configs()
+      target_queue_names = {qc['name'] for qc in target_queue_configs}
+      queue_defaults_map = {qc['name']: qc.get('defaults', {}) for qc in target_queue_configs}
+
+      # Filter to jobs in target queues
+      target_jobs = [j for j in queued_jobs if j.queue in target_queue_names]
+
+      if not target_jobs:
+         self.console.print("  [yellow]No jobs found in production queues, skipping sampled jobs plot[/yellow]")
+         return outputs
+
+      # Group by (queue, allocation_type) for diverse sampling
+      groups = defaultdict(list)
+      for job in target_jobs:
+         key = (job.queue, job.allocation_type or 'unknown')
+         groups[key].append(job)
+
+      # Sample jobs, trying to get diversity across groups
+      sampled_jobs = []
+      keys = list(groups.keys())
+      random.shuffle(keys)
+
+      # First pass: one job per group
+      for key in keys:
+         if len(sampled_jobs) >= sample_count:
+            break
+         job = random.choice(groups[key])
+         sampled_jobs.append(job)
+
+      # Second pass: fill remaining slots randomly from all target jobs
+      remaining = sample_count - len(sampled_jobs)
+      if remaining > 0:
+         already_sampled_ids = {j.job_id for j in sampled_jobs}
+         available = [j for j in target_jobs if j.job_id not in already_sampled_ids]
+         if available:
+            additional = random.sample(available, min(remaining, len(available)))
+            sampled_jobs.extend(additional)
+
+      if not sampled_jobs:
+         self.console.print("  [yellow]Could not sample any jobs[/yellow]")
+         return outputs
+
+      self.console.print(f"  [dim]Plotting score curves for {len(sampled_jobs)} sampled jobs...[/dim]")
+
+      # Set up time array
+      max_time_hours = getattr(args, 'max_time_hours', 48.0)
+      time_hours = np.linspace(0.1, max_time_hours, 200)
+      time_seconds = time_hours * 3600
+
+      # Create figure
+      fig, ax = plt.subplots(figsize=(14, 9))
+
+      # Color palette (colorblind-friendly)
+      queue_colors_palette = [
+         '#1f77b4',  # Blue
+         '#ff7f0e',  # Orange
+         '#2ca02c',  # Green
+         '#d62728',  # Red
+         '#9467bd',  # Purple
+         '#8c564b',  # Brown
+         '#e377c2',  # Pink
+         '#7f7f7f',  # Gray
+         '#bcbd22',  # Olive
+         '#17becf',  # Cyan
+      ]
+
+      # Assign colors to queues (consistent coloring per queue)
+      unique_queues = sorted(set(job.queue for job in sampled_jobs))
+      queue_color_map = {q: queue_colors_palette[i % len(queue_colors_palette)] for i, q in enumerate(unique_queues)}
+
+      # Track which queues we've added to the legend
+      legend_handles = []
+      legend_labels = []
+      queues_in_legend = set()
+
+      # Group sampled jobs by queue for plotting (so legend entries are in order)
+      jobs_by_queue = defaultdict(list)
+      for job in sampled_jobs:
+         jobs_by_queue[job.queue].append(job)
+
+      for queue_name in unique_queues:
+         color = queue_color_map[queue_name]
+         queue_defaults = queue_defaults_map.get(queue_name, {})
+         merged_defaults = {**server_defaults, **queue_defaults}
+
+         first_line = None
+         for job in jobs_by_queue[queue_name]:
+            # Get job parameters
+            resource_list = job.raw_attributes.get('Resource_List', {})
+            nodect = job.nodes or 1
+            walltime_str = job.walltime or '01:00:00'
+            walltime_seconds_job = self._parse_walltime_to_seconds(walltime_str)
+            project_priority = int(resource_list.get('project_priority', 1))
+
+            # Calculate scores over time
+            scores = []
+            for t in time_seconds:
+               score = self._evaluate_formula(
+                  formula,
+                  nodect=nodect,
+                  walltime_seconds=walltime_seconds_job,
+                  eligible_time_seconds=t,
+                  project_priority=project_priority,
+                  server_defaults=merged_defaults
+               )
+               scores.append(score)
+            scores = np.array(scores)
+
+            # Plot the curve
+            line, = ax.plot(time_hours, scores, color=color, linewidth=1.5, alpha=0.75)
+
+            # Keep the first line for legend
+            if first_line is None:
+               first_line = line
+
+         # Add one legend entry per queue
+         if first_line is not None:
+            legend_handles.append(first_line)
+            job_count = len(jobs_by_queue[queue_name])
+            legend_labels.append(f"{queue_name} ({job_count} jobs)")
+
+      # Set up axes
+      ax.set_xlabel('Eligible Time (hours)', fontsize=12)
+      ax.set_ylabel('Score', fontsize=12)
+      ax.set_title(
+         f'PBS Job Score vs Time for {len(sampled_jobs)} Sampled Jobs\n'
+         f'(Randomly sampled from production queues)',
+         fontsize=14, fontweight='bold'
+      )
+
+      # Apply log scale if requested
+      use_log_scale = getattr(args, 'log_scale', False)
+      if use_log_scale:
+         ax.set_yscale('log')
+
+      # Add legend (outside plot on the right)
+      ax.legend(
+         legend_handles, legend_labels,
+         loc='upper left', bbox_to_anchor=(1.02, 1),
+         borderaxespad=0, fontsize=10, frameon=True,
+         title='Queue'
+      )
+
+      ax.grid(True, alpha=0.3)
+
+      # Add annotation about scoring components
+      enabled_components = []
+      if server_defaults.get('enable_wfp', 0):
+         enabled_components.append('WFP')
+      if server_defaults.get('enable_backfill', 0):
+         enabled_components.append('Backfill')
+      if server_defaults.get('enable_fifo', 0):
+         enabled_components.append('FIFO')
+      if server_defaults.get('base_score', 0):
+         enabled_components.insert(0, f"Base={server_defaults.get('base_score')}")
+
+      components_str = ', '.join(enabled_components) if enabled_components else 'None configured'
+      ax.annotate(
+         f"Active scoring components: {components_str}",
+         xy=(0.02, 0.02), xycoords='axes fraction',
+         fontsize=9, color='gray',
+         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8)
+      )
+
+      plt.tight_layout()
+      path = os.path.join(output_dir, 'sampled_jobs_score_vs_time.png')
+      fig.savefig(path, bbox_inches='tight', dpi=120)
+      plt.close(fig)
+
+      outputs['sampled_jobs_score_vs_time'] = path
+      self.console.print(f"  [green]Saved:[/green] {path}")
+      return outputs
+
+   def _get_target_queue_configs(self) -> List[Dict[str, Any]]:
+      """Get queue configs for prod-fed queues + debug queues.
+
+      Returns configs for:
+      - All execution queues fed by the 'prod' routing queue
+      - The 'debug' queue
+      - The 'debug-scaling' queue
+      """
+      try:
+         queues = self.collector.pbs_commands.qstat_queues()
+         queues_by_name = {q.name: q for q in queues}
+
+         target_queue_names = set()
+
+         # 1. Get queues fed by 'prod' routing queue
+         if 'prod' in queues_by_name:
+            prod_q = queues_by_name['prod']
+            route_destinations = prod_q.raw_attributes.get('route_destinations', '')
+            if route_destinations:
+               dest_names = [name.strip() for name in route_destinations.split(',')]
+               # Filter out backfill queues
+               for name in dest_names:
+                  if not name.startswith('backfill-'):
+                     target_queue_names.add(name)
+
+         # Also check prod-large for larger node counts
+         if 'prod-large' in queues_by_name:
+            prod_large = queues_by_name['prod-large']
+            route_destinations = prod_large.raw_attributes.get('route_destinations', '')
+            if route_destinations:
+               dest_names = [name.strip() for name in route_destinations.split(',')]
+               for name in dest_names:
+                  if not name.startswith('backfill-'):
+                     target_queue_names.add(name)
+
+         # 2. Add debug queues
+         target_queue_names.add('debug')
+         target_queue_names.add('debug-scaling')
+
+         # 3. Build queue configs
+         queue_configs = []
+         for queue_name in target_queue_names:
+            if queue_name not in queues_by_name:
+               continue
+
+            q = queues_by_name[queue_name]
+            # Only include execution queues
+            if q.raw_attributes.get('queue_type') != 'Execution':
+               continue
+
+            raw = q.raw_attributes
+            resources_min = raw.get('resources_min', {})
+            resources_max = raw.get('resources_max', {})
+            resources_default = raw.get('resources_default', {})
+
+            # Parse node limits
+            min_nodes = resources_min.get('nodect', 1)
+            max_nodes = resources_max.get('nodect', float('inf'))
+
+            if isinstance(min_nodes, str):
+               min_nodes = int(min_nodes)
+            if isinstance(max_nodes, str):
+               max_nodes = int(max_nodes)
+
+            # Parse walltime limits
+            max_walltime = resources_max.get('walltime')
+            min_walltime = resources_min.get('walltime')
+
+            max_walltime_hours = self._parse_walltime_to_hours(max_walltime) if max_walltime else None
+            min_walltime_hours = self._parse_walltime_to_hours(min_walltime) if min_walltime else None
+
+            queue_configs.append({
+               'name': queue_name,
+               'min_nodes': min_nodes,
+               'max_nodes': max_nodes,
+               'min_walltime_hours': min_walltime_hours,
+               'max_walltime_hours': max_walltime_hours,
+               'defaults': resources_default,
+            })
+
+         # Sort by min_nodes for consistent ordering
+         queue_configs.sort(key=lambda x: (x['min_nodes'], x['name']))
+
+         return queue_configs
+
+      except Exception as e:
+         self.logger.warning(f"Failed to get target queue configs: {e}")
+         return []
+
+   def _detect_all_execution_queues(self) -> List[Dict[str, Any]]:
+      """Detect all execution queues and their settings.
+
+      Returns a list of queue config dicts with:
+      - name: Queue name
+      - min_nodes, max_nodes: Node count limits
+      - min_walltime_hours, max_walltime_hours: Walltime limits
+      - defaults: Queue-specific resources_default dict
+      """
+      try:
+         queues = self.collector.pbs_commands.qstat_queues()
+
+         queue_configs = []
+         for q in queues:
+            # Only include execution queues
+            if q.raw_attributes.get('queue_type') != 'Execution':
+               continue
+
+            raw = q.raw_attributes
+            resources_min = raw.get('resources_min', {})
+            resources_max = raw.get('resources_max', {})
+            resources_default = raw.get('resources_default', {})
+
+            # Parse node limits
+            min_nodes = resources_min.get('nodect', 1)
+            max_nodes = resources_max.get('nodect', float('inf'))
+
+            if isinstance(min_nodes, str):
+               min_nodes = int(min_nodes)
+            if isinstance(max_nodes, str):
+               max_nodes = int(max_nodes)
+
+            # Parse walltime limits
+            max_walltime = resources_max.get('walltime')
+            min_walltime = resources_min.get('walltime')
+
+            max_walltime_hours = self._parse_walltime_to_hours(max_walltime) if max_walltime else None
+            min_walltime_hours = self._parse_walltime_to_hours(min_walltime) if min_walltime else None
+
+            queue_configs.append({
+               'name': q.name,
+               'min_nodes': min_nodes,
+               'max_nodes': max_nodes,
+               'min_walltime_hours': min_walltime_hours,
+               'max_walltime_hours': max_walltime_hours,
+               'defaults': resources_default,
+            })
+
+         # Sort by min_nodes for consistent ordering
+         queue_configs.sort(key=lambda x: (x['min_nodes'], x['name']))
+
+         return queue_configs
+
+      except Exception as e:
+         self.logger.warning(f"Failed to detect execution queues: {e}")
+         return []
 
    def _plot_score_heatmap(self, formula: str, server_defaults: Dict[str, Any],
                            args: argparse.Namespace, output_dir: str) -> Dict[str, str]:
