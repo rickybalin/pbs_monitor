@@ -173,5 +173,5 @@ flake8 pbs_monitor/
 
 ## Next Steps
 
-- Full CLI reference: `cli_reference.md`
-- Database relocation guide: `database_relocation.md`
+- [Full CLI reference](cli_reference.md)
+- [Database relocation guide](database_relocation.md)

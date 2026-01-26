@@ -144,10 +144,10 @@ The daemon periodically collects job, node, and queue data to the database.
 
 ## Documentation
 
-See `docs/` for detailed documentation:
-- `docs/user/cli_reference.md` - Full CLI reference
-- `docs/user/database.md` - Database guide
-- `docs/user/configuration.md` - Configuration options
+See [docs/](docs/) for detailed documentation:
+- [Quick Start](docs/user/quickstart.md) - Installation, setup, and usage
+- [CLI Reference](docs/user/cli_reference.md) - Full command reference
+- [Database Relocation](docs/user/database_relocation.md) - Moving your database
 
 ## License
 
