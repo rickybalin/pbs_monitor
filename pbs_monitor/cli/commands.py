@@ -3757,7 +3757,9 @@ class ScoreFormulaCommand(BaseCommand):
       ax.set_title(title, fontsize=14, fontweight='bold')
 
       if use_log_scale:
+         ax.set_xscale('log')
          ax.set_yscale('log')
+         ax.set_xlim(left=1)  # Start at 1 hour for log scale
 
       # Add legend
       ax.legend(
@@ -3937,7 +3939,9 @@ class ScoreFormulaCommand(BaseCommand):
       # Apply log scale if requested
       use_log_scale = getattr(args, 'log_scale', False)
       if use_log_scale:
+         ax.set_xscale('log')
          ax.set_yscale('log')
+         ax.set_xlim(left=1)  # Start at 1 hour for log scale
 
       # Add annotation about line styles
       ax.annotate(
@@ -4137,7 +4141,9 @@ class ScoreFormulaCommand(BaseCommand):
       # Apply log scale if requested
       use_log_scale = getattr(args, 'log_scale', False)
       if use_log_scale:
+         ax.set_xscale('log')
          ax.set_yscale('log')
+         ax.set_xlim(left=1)  # Start at 1 hour for log scale
 
       # Add legend (outside plot on the right)
       ax.legend(
@@ -4148,25 +4154,6 @@ class ScoreFormulaCommand(BaseCommand):
       )
 
       ax.grid(True, alpha=0.3)
-
-      # Add annotation about scoring components
-      enabled_components = []
-      if server_defaults.get('enable_wfp', 0):
-         enabled_components.append('WFP')
-      if server_defaults.get('enable_backfill', 0):
-         enabled_components.append('Backfill')
-      if server_defaults.get('enable_fifo', 0):
-         enabled_components.append('FIFO')
-      if server_defaults.get('base_score', 0):
-         enabled_components.insert(0, f"Base={server_defaults.get('base_score')}")
-
-      components_str = ', '.join(enabled_components) if enabled_components else 'None configured'
-      ax.annotate(
-         f"Active scoring components: {components_str}",
-         xy=(0.02, 0.02), xycoords='axes fraction',
-         fontsize=9, color='gray',
-         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8)
-      )
 
       plt.tight_layout()
       path = os.path.join(output_dir, 'sampled_jobs_score_vs_time.png')
