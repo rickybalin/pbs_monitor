@@ -535,15 +535,14 @@ class JobsCommand(BaseCommand):
          print("No jobs found")
          return 0
       
-      # Determine output format
-      output_format = getattr(args, 'format', 'detailed')
-      
-      if output_format == 'json':
+      # Determine output format based on flags
+      # Priority: --json > -d/--detailed > table (default)
+      if getattr(args, 'json', False):
          return self._show_job_details_json(all_jobs, args)
-      elif output_format == 'table':
-         return self._show_job_details_table(all_jobs, args)
-      else:  # detailed
+      elif getattr(args, 'detailed', False):
          return self._show_job_details_detailed(all_jobs, args)
+      else:
+         return self._show_job_details_table(all_jobs, args)
    
    def _show_job_details_detailed(self, jobs: List[PBSJob], args: argparse.Namespace) -> int:
       """Show detailed job information in formatted sections"""

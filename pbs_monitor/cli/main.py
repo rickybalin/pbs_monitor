@@ -181,7 +181,7 @@ Examples:
    jobs_parser.add_argument(
       "-d", "--detailed",
       action="store_true",
-      help="Show detailed information for specific jobs"
+      help="Show detailed information for specific jobs (formatted sections instead of table)"
    )
    jobs_parser.add_argument(
       "--history",
@@ -189,10 +189,9 @@ Examples:
       help="Include job history from database (for detailed view)"
    )
    jobs_parser.add_argument(
-      "--format",
-      choices=["table", "detailed", "json"],
-      default="table",
-      help="Output format for job details (default: table)"
+      "--json",
+      action="store_true",
+      help="Output job details in JSON format"
    )
    jobs_parser.add_argument(
       "--show-raw",

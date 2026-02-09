@@ -48,7 +48,7 @@ Show job information.
 ```
 pbs-monitor jobs [-u USER] [-p PROJECT] [-q QUEUE] [-s STATE] [-r]
                  [--columns COLUMNS] [--sort SORT] [--reverse] [--collect]
-                 [-d] [--history] [--format {table,detailed,json}] [--show-raw]
+                 [-d] [--history] [--json] [--show-raw]
                  [job_ids ...]
 ```
 
@@ -63,9 +63,9 @@ pbs-monitor jobs [-u USER] [-p PROJECT] [-q QUEUE] [-s STATE] [-r]
 | `--sort` | Sort by column (default: score) |
 | `--reverse` | Reverse sort order |
 | `--collect` | Persist data to database |
-| `-d, --detailed` | Show detailed job info |
+| `-d, --detailed` | Show detailed job info (formatted sections instead of table) |
 | `--history` | Include job history from database |
-| `--format` | Output format: table, detailed, json |
+| `--json` | Output job details in JSON format |
 | `--show-raw` | Show raw PBS attributes |
 
 **Available columns:** job_id, name, owner, project, allocation, state, queue, nodes, ppn, walltime, walltime_actual, memory, submit_time, start_time, end_time, runtime, priority, cores, score, queue_time, exit_status, execution_node
