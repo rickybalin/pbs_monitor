@@ -649,6 +649,116 @@ class UsageInsights:
       except Exception as e:
          self.logger.debug(f"Plot ecdf_wait_by_allocation_type failed: {e}")
 
+      # 5) Requested vs Used node-hours hexbin
+      try:
+         # Calculate used_node_hours for each job (nodes * run_time_hours)
+         df_efficiency = df.dropna(subset=['run_time_hours', 'nodes', 'requested_node_hours']).copy()
+         df_efficiency['used_node_hours'] = df_efficiency['nodes'] * df_efficiency['run_time_hours']
+         # Filter to jobs with positive values for log scale
+         df_efficiency = df_efficiency[
+            (df_efficiency['requested_node_hours'] > 0) &
+            (df_efficiency['used_node_hours'] > 0)
+         ]
+
+         if not df_efficiency.empty and len(df_efficiency) >= 5:
+            fig, ax = plt.subplots(figsize=(10, 8))
+
+            # Use log scale for both axes
+            x = df_efficiency['requested_node_hours'].values
+            y = df_efficiency['used_node_hours'].values
+
+            # Hexbin with log scale
+            hb = ax.hexbin(x, y, gridsize=40, mincnt=1, xscale='log', yscale='log', cmap='viridis')
+            cb = plt.colorbar(hb, ax=ax)
+            cb.set_label('Number of jobs')
+
+            # Add y=x reference line (perfect efficiency)
+            min_val = min(x.min(), y.min())
+            max_val = max(x.max(), y.max())
+            ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect efficiency (y=x)', alpha=0.7)
+
+            ax.set_xlabel('Requested node-hours (log)')
+            ax.set_ylabel('Used node-hours (log)')
+            ax.set_title('Requested vs Used Node-Hours\n(points below line = underutilization)')
+            ax.legend(loc='upper left')
+
+            if save_dir:
+               pth = os.path.join(save_dir, 'requested_vs_used_node_hours.png')
+               fig.savefig(pth, bbox_inches='tight', dpi=dpi)
+               outputs['requested_vs_used_node_hours'] = pth
+            plt.close(fig)
+      except Exception as e:
+         self.logger.debug(f"Plot requested_vs_used_node_hours failed: {e}")
+
+      # 6) Efficiency ratio distribution (used/requested)
+      try:
+         df_efficiency = df.dropna(subset=['run_time_hours', 'nodes', 'requested_node_hours']).copy()
+         df_efficiency['used_node_hours'] = df_efficiency['nodes'] * df_efficiency['run_time_hours']
+         # Filter to jobs with positive requested hours
+         df_efficiency = df_efficiency[df_efficiency['requested_node_hours'] > 0]
+         df_efficiency['efficiency'] = df_efficiency['used_node_hours'] / df_efficiency['requested_node_hours']
+
+         # Export efficiency outliers (>100%) to CSV for investigation
+         if save_dir:
+            outliers = df_efficiency[df_efficiency['efficiency'] > 1.0].copy()
+            if not outliers.empty:
+               # Convert walltime and runtime to minutes for readability
+               outliers['walltime_minutes'] = outliers['walltime_hours'] * 60
+               outliers['run_time_minutes'] = outliers['run_time_hours'] * 60
+               # Select columns for investigation
+               outlier_cols = [
+                  'job_id', 'owner', 'project', 'queue',
+                  'nodes', 'walltime_minutes', 'requested_node_hours',
+                  'submit_time', 'start_time', 'end_time',
+                  'run_time_minutes', 'used_node_hours', 'efficiency'
+               ]
+               # Only include columns that exist
+               outlier_cols = [c for c in outlier_cols if c in outliers.columns]
+               outliers_export = outliers[outlier_cols].sort_values('efficiency', ascending=False)
+               csv_path = os.path.join(save_dir, 'efficiency_outliers.csv')
+               outliers_export.to_csv(csv_path, index=False)
+               outputs['efficiency_outliers_csv'] = csv_path
+               self.logger.info(f"Exported {len(outliers_export)} efficiency outliers (>100%) to {csv_path}")
+
+         # Cap efficiency at reasonable bounds (some jobs may have data issues)
+         df_efficiency['efficiency'] = df_efficiency['efficiency'].clip(0, 2)
+
+         if not df_efficiency.empty and len(df_efficiency) >= 5:
+            fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+            # Left: Histogram
+            ax1 = axes[0]
+            ax1.hist(df_efficiency['efficiency'], bins=50, edgecolor='black', alpha=0.7)
+            ax1.axvline(x=1.0, color='r', linestyle='--', linewidth=2, label='100% efficiency')
+            ax1.axvline(x=df_efficiency['efficiency'].median(), color='orange', linestyle='-', linewidth=2, label=f'Median: {df_efficiency["efficiency"].median():.1%}')
+            ax1.set_xlabel('Efficiency (used / requested)')
+            ax1.set_ylabel('Number of jobs')
+            ax1.set_title('Job Efficiency Distribution')
+            ax1.legend()
+
+            # Right: ECDF by queue
+            ax2 = axes[1]
+            for q, sub in df_efficiency.groupby('queue'):
+               eff_vals = np.sort(sub['efficiency'].dropna().values)
+               if eff_vals.size == 0:
+                  continue
+               ecdf_y = np.arange(1, eff_vals.size + 1) / eff_vals.size
+               ax2.step(eff_vals, ecdf_y, where='post', label=str(q), color=queue_palette.get(str(q)))
+            ax2.axvline(x=1.0, color='r', linestyle='--', linewidth=1, alpha=0.5)
+            ax2.set_xlabel('Efficiency (used / requested)')
+            ax2.set_ylabel('ECDF')
+            ax2.set_title('Efficiency ECDF by Queue')
+            ax2.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Queue', frameon=False)
+
+            plt.tight_layout()
+            if save_dir:
+               pth = os.path.join(save_dir, 'efficiency_distribution.png')
+               fig.savefig(pth, bbox_inches='tight', dpi=dpi)
+               outputs['efficiency_distribution'] = pth
+            plt.close(fig)
+      except Exception as e:
+         self.logger.debug(f"Plot efficiency_distribution failed: {e}")
+
       return outputs
 
    def generate_plots_extended(
