@@ -45,7 +45,9 @@ from ..data_collector import DataCollector
 from ..models.job import PBSJob, JobState as PBSJobState
 from ..pbs_commands import PBSCommands
 from ..utils.json_helpers import load_json_safe
+from ..utils.system_info import get_system_name, add_system_label
 import matplotlib.ticker as mticker
+from matplotlib.colors import LogNorm
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -179,6 +181,7 @@ class UsageInsights:
          for i, v in enumerate([total_a, total_b]):
             ax.text(i, v, f'{int(v):,}', ha='center', va='bottom')
             
+         add_system_label(ax)
          if save_dir:
             pth = os.path.join(save_dir, 'total_throughput_comparison.png')
             fig.savefig(pth, bbox_inches='tight', dpi=120)
@@ -200,7 +203,8 @@ class UsageInsights:
          ax.set_ylabel('Requested Node-Hours')
          plt.xticks(rotation=45, ha='right')
          ax.legend(title='Period')
-         
+
+         add_system_label(ax)
          if save_dir:
             pth = os.path.join(save_dir, f'throughput_by_{group_by}.png')
             fig.savefig(pth, bbox_inches='tight', dpi=120)
@@ -249,7 +253,8 @@ class UsageInsights:
              ax.set_ylabel('Total Node-Hours (Weighted Count)')
              ax.set_title('Wait Time Distribution (Weighted by Node-Hours)')
              ax.legend()
-             
+
+             add_system_label(ax)
              if save_dir:
                 pth = os.path.join(save_dir, 'wait_time_weighted_dist.png')
                 fig.savefig(pth, bbox_inches='tight', dpi=120)
@@ -353,7 +358,7 @@ class UsageInsights:
                'job_id', 'owner', 'project', 'queue', 'allocation_type', 'nodes', 'walltime_hours',
                'submit_time', 'start_time', 'end_time', 'wait_time_hours',
                'run_time_hours', 'requested_node_hours', 'start_score',
-               'start_score_quantile', 'state'
+               'start_score_quantile', 'eligible_time_hours', 'state'
             ])
 
          # Build raw records with derived metrics
@@ -490,6 +495,16 @@ class UsageInsights:
                run_h = self._compute_run_hours(job.start_time, job.end_time)
                start_score = job_start_scores.get(job.job_id) # Using pre-calculated/fetched score
                requested_node_hours = (job.nodes or 0) * walltime_hours
+
+               # Parse eligible_time from raw PBS data (time job was eligible before running)
+               eligible_time_hours = np.nan
+               raw_pbs = getattr(job, 'raw_pbs_data', None)
+               if isinstance(raw_pbs, dict):
+                  eligible_time_str = raw_pbs.get('eligible_time')
+                  if eligible_time_str:
+                     eligible_time_secs = pbs_cmds._parse_eligible_time_to_seconds(eligible_time_str)
+                     eligible_time_hours = eligible_time_secs / 3600.0
+
                records.append({
                   'job_id': job.job_id,
                   'owner': job.owner,
@@ -505,6 +520,7 @@ class UsageInsights:
                   'run_time_hours': float(run_h) if run_h is not None else np.nan,
                   'requested_node_hours': float(requested_node_hours),
                   'start_score': float(start_score) if start_score is not None else np.nan,
+                  'eligible_time_hours': float(eligible_time_hours),
                   'state': str(job.state) if job.state else None,
                })
             except Exception as e:  # robust to malformed rows
@@ -574,6 +590,7 @@ class UsageInsights:
          for ax in g.axes.ravel():
             ax.set_xscale('log')
          g.fig.suptitle('Score at start vs Wait time (by queue)', y=1.02)
+         add_system_label(g.axes.ravel()[-1])
          if save_dir:
             pth = os.path.join(save_dir, 'score_vs_wait_by_queue.png')
             g.fig.savefig(pth, bbox_inches='tight', dpi=dpi)
@@ -590,6 +607,7 @@ class UsageInsights:
          for ax in g.axes.ravel():
             ax.set_xscale('log')
          g.fig.suptitle('Score at start vs Requested node-hours (by queue)', y=1.02)
+         add_system_label(g.axes.ravel()[-1])
          if save_dir:
             pth = os.path.join(save_dir, 'score_vs_node_hours_by_queue.png')
             g.fig.savefig(pth, bbox_inches='tight', dpi=dpi)
@@ -612,6 +630,7 @@ class UsageInsights:
          ax.set_ylabel('ECDF')
          ax.set_title('ECDF of wait time by queue')
          ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Queue', frameon=False)
+         add_system_label(ax)
          if save_dir:
             pth = os.path.join(save_dir, 'ecdf_wait_by_queue.png')
             fig.savefig(pth, bbox_inches='tight', dpi=dpi)
@@ -641,6 +660,7 @@ class UsageInsights:
             ax.set_ylabel('ECDF')
             ax.set_title('ECDF of wait time by allocation type')
             ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Allocation Type', frameon=False)
+            add_system_label(ax)
             if save_dir:
                pth = os.path.join(save_dir, 'ecdf_wait_by_allocation_type.png')
                fig.savefig(pth, bbox_inches='tight', dpi=dpi)
@@ -668,9 +688,9 @@ class UsageInsights:
             y = df_efficiency['used_node_hours'].values
 
             # Hexbin with log scale
-            hb = ax.hexbin(x, y, gridsize=40, mincnt=1, xscale='log', yscale='log', cmap='viridis')
+            hb = ax.hexbin(x, y, gridsize=40, mincnt=1, xscale='log', yscale='log', cmap='viridis', norm=LogNorm())
             cb = plt.colorbar(hb, ax=ax)
-            cb.set_label('Number of jobs')
+            cb.set_label('Number of jobs (log scale)')
 
             # Add y=x reference line (perfect efficiency)
             min_val = min(x.min(), y.min())
@@ -682,6 +702,7 @@ class UsageInsights:
             ax.set_title('Requested vs Used Node-Hours\n(points below line = underutilization)')
             ax.legend(loc='upper left')
 
+            add_system_label(ax)
             if save_dir:
                pth = os.path.join(save_dir, 'requested_vs_used_node_hours.png')
                fig.savefig(pth, bbox_inches='tight', dpi=dpi)
@@ -750,6 +771,7 @@ class UsageInsights:
             ax2.set_title('Efficiency ECDF by Queue')
             ax2.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Queue', frameon=False)
 
+            add_system_label(ax2)
             plt.tight_layout()
             if save_dir:
                pth = os.path.join(save_dir, 'efficiency_distribution.png')
@@ -758,6 +780,72 @@ class UsageInsights:
             plt.close(fig)
       except Exception as e:
          self.logger.debug(f"Plot efficiency_distribution failed: {e}")
+
+      # 7) Box plot of Eligible Time by Queue
+      try:
+         df_elig = df.dropna(subset=['eligible_time_hours']).copy()
+         if not df_elig.empty and len(df_elig) >= 5:
+            # Sort queues alphabetically for consistency
+            queue_order = sorted(df_elig['queue'].unique())
+
+            fig, ax = plt.subplots(figsize=(12, 6))
+            sns.boxplot(
+               data=df_elig,
+               x='queue',
+               y='eligible_time_hours',
+               hue='queue',
+               order=queue_order,
+               palette=queue_palette,
+               legend=False,
+               ax=ax
+            )
+            ax.set_yscale('log')
+            ax.set_xlabel('Queue')
+            ax.set_ylabel('Eligible Time (hours)')
+            ax.set_title('Eligible Time by Queue')
+            ax.tick_params(axis='x', rotation=45)
+            add_system_label(ax)
+            plt.tight_layout()
+            if save_dir:
+               pth = os.path.join(save_dir, 'eligible_time_by_queue.png')
+               fig.savefig(pth, bbox_inches='tight', dpi=dpi)
+               outputs['eligible_time_by_queue'] = pth
+            plt.close(fig)
+      except Exception as e:
+         self.logger.debug(f"Plot eligible_time_by_queue failed: {e}")
+
+      # 8) Box plot of Queued Time by Queue
+      try:
+         df_queued = df.dropna(subset=['wait_time_hours']).copy()
+         if not df_queued.empty and len(df_queued) >= 5:
+            # Sort queues alphabetically for consistency
+            queue_order = sorted(df_queued['queue'].unique())
+
+            fig, ax = plt.subplots(figsize=(12, 6))
+            sns.boxplot(
+               data=df_queued,
+               x='queue',
+               y='wait_time_hours',
+               hue='queue',
+               order=queue_order,
+               palette=queue_palette,
+               legend=False,
+               ax=ax
+            )
+            ax.set_yscale('log')
+            ax.set_xlabel('Queue')
+            ax.set_ylabel('Queued Time (hours)')
+            ax.set_title('Queued Time by Queue')
+            ax.tick_params(axis='x', rotation=45)
+            add_system_label(ax)
+            plt.tight_layout()
+            if save_dir:
+               pth = os.path.join(save_dir, 'queued_time_by_queue.png')
+               fig.savefig(pth, bbox_inches='tight', dpi=dpi)
+               outputs['queued_time_by_queue'] = pth
+            plt.close(fig)
+      except Exception as e:
+         self.logger.debug(f"Plot queued_time_by_queue failed: {e}")
 
       return outputs
 
@@ -836,6 +924,7 @@ class UsageInsights:
             # Force the formatter to be applied
             fig.autofmt_xdate(rotation=45)
             ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Queue', frameon=False)
+            add_system_label(ax)
             if save_dir:
                pth = os.path.join(save_dir, f'queue_depth_machine_hours_per_{ts_freq}.png')
                fig.savefig(pth, bbox_inches='tight', dpi=dpi)
@@ -876,6 +965,7 @@ class UsageInsights:
             fig.autofmt_xdate(rotation=45)
 
             ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Allocation Type', frameon=False)
+            add_system_label(ax)
             if save_dir:
                pth = os.path.join(save_dir, f'queue_depth_machine_hours_by_allocation_per_{ts_freq}.png')
                fig.savefig(pth, bbox_inches='tight', dpi=dpi)
@@ -914,6 +1004,7 @@ class UsageInsights:
             ax.set_xlabel('Wait time')
             ax.set_ylabel('Number of jobs')
             plt.xticks(rotation=45)
+            add_system_label(ax)
             if save_dir:
                pth = os.path.join(save_dir, 'current_wait_distribution.png')
                fig.savefig(pth, bbox_inches='tight', dpi=dpi)
@@ -996,6 +1087,7 @@ class UsageInsights:
                plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
                # Force the formatter to be applied
                fig.autofmt_xdate(rotation=45)
+               add_system_label(ax)
                if save_dir:
                   pth = os.path.join(save_dir, f'utilization_percent_per_{ts_freq}.png')
                   fig.savefig(pth, bbox_inches='tight', dpi=dpi)
@@ -1863,7 +1955,8 @@ class UsageInsights:
       ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title=group_col.replace('_', ' ').title(), frameon=False)
       
       fig.autofmt_xdate(rotation=45)
-      
+
+      add_system_label(ax)
       saved_path = None
       if save_path:
          fig.savefig(save_path, bbox_inches='tight', dpi=dpi)
@@ -2467,6 +2560,7 @@ class UsageInsights:
 
       plt.tight_layout()
 
+      add_system_label(axes[1])
       if save_dir:
          path = os.path.join(save_dir, 'run_score_heatmap.png')
          fig.savefig(path, bbox_inches='tight', dpi=dpi)
@@ -2559,6 +2653,7 @@ class UsageInsights:
 
       plt.tight_layout()
 
+      add_system_label(axes[-1])
       if save_dir:
          path = os.path.join(save_dir, 'run_score_ridge.png')
          fig.savefig(path, bbox_inches='tight', dpi=dpi)
@@ -2657,6 +2752,7 @@ class UsageInsights:
 
       plt.tight_layout()
 
+      add_system_label(ax)
       if save_dir:
          path = os.path.join(save_dir, 'run_score_quantiles.png')
          fig.savefig(path, bbox_inches='tight', dpi=dpi)
