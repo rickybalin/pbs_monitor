@@ -744,22 +744,25 @@ class UsageInsights:
          # Cap efficiency at reasonable bounds (some jobs may have data issues)
          df_efficiency['efficiency'] = df_efficiency['efficiency'].clip(0, 2)
 
-         if not df_efficiency.empty and len(df_efficiency) >= 5:
+         # Helper function to create efficiency distribution plot
+         def _plot_efficiency_distribution(df_eff: pd.DataFrame, title_suffix: str, filename: str) -> None:
+            if df_eff.empty or len(df_eff) < 5:
+               return
             fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
             # Left: Histogram
             ax1 = axes[0]
-            ax1.hist(df_efficiency['efficiency'], bins=50, edgecolor='black', alpha=0.7)
+            ax1.hist(df_eff['efficiency'], bins=50, edgecolor='black', alpha=0.7)
             ax1.axvline(x=1.0, color='r', linestyle='--', linewidth=2, label='100% efficiency')
-            ax1.axvline(x=df_efficiency['efficiency'].median(), color='orange', linestyle='-', linewidth=2, label=f'Median: {df_efficiency["efficiency"].median():.1%}')
+            ax1.axvline(x=df_eff['efficiency'].median(), color='orange', linestyle='-', linewidth=2, label=f'Median: {df_eff["efficiency"].median():.1%}')
             ax1.set_xlabel('Efficiency (used / requested)')
             ax1.set_ylabel('Number of jobs')
-            ax1.set_title('Job Efficiency Distribution')
+            ax1.set_title(f'Job Efficiency Distribution{title_suffix}')
             ax1.legend()
 
             # Right: ECDF by queue
             ax2 = axes[1]
-            for q, sub in df_efficiency.groupby('queue'):
+            for q, sub in df_eff.groupby('queue'):
                eff_vals = np.sort(sub['efficiency'].dropna().values)
                if eff_vals.size == 0:
                   continue
@@ -768,16 +771,28 @@ class UsageInsights:
             ax2.axvline(x=1.0, color='r', linestyle='--', linewidth=1, alpha=0.5)
             ax2.set_xlabel('Efficiency (used / requested)')
             ax2.set_ylabel('ECDF')
-            ax2.set_title('Efficiency ECDF by Queue')
+            ax2.set_title(f'Efficiency ECDF by Queue{title_suffix}')
             ax2.legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0, fontsize='small', title='Queue', frameon=False)
 
             add_system_label(ax2)
             plt.tight_layout()
             if save_dir:
-               pth = os.path.join(save_dir, 'efficiency_distribution.png')
+               pth = os.path.join(save_dir, filename)
                fig.savefig(pth, bbox_inches='tight', dpi=dpi)
-               outputs['efficiency_distribution'] = pth
+               outputs[filename.replace('.png', '')] = pth
             plt.close(fig)
+
+         # Plot 1: All jobs
+         _plot_efficiency_distribution(df_efficiency, '', 'efficiency_distribution.png')
+
+         # Plot 2: Jobs with wall-time > 10 minutes (exclude quick failures)
+         df_eff_10min = df_efficiency[df_efficiency['run_time_hours'] > 10 / 60]
+         _plot_efficiency_distribution(df_eff_10min, '\n(jobs > 10 min)', 'efficiency_distribution_gt10min.png')
+
+         # Plot 3: Jobs with wall-time > 90 minutes (exclude debug queues)
+         df_eff_90min = df_efficiency[df_efficiency['run_time_hours'] > 90 / 60]
+         _plot_efficiency_distribution(df_eff_90min, '\n(jobs > 90 min)', 'efficiency_distribution_gt90min.png')
+
       except Exception as e:
          self.logger.debug(f"Plot efficiency_distribution failed: {e}")
 
