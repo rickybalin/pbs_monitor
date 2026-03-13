@@ -608,16 +608,16 @@ class PBSCommands:
          self.logger.error(f"Failed to get job sort formula: {str(e)}")
          return None
    
-   def calculate_job_score(self, job_data: Dict[str, Any], server_defaults: Optional[Dict[str, Any]] = None, 
+   def calculate_job_score(self, job_data: Dict[str, Any], server_defaults: Optional[Dict[str, Any]] = None,
                           server_data: Optional[Dict[str, Any]] = None) -> Optional[float]:
       """
       Calculate job score using the server's job sort formula
-      
+
       Args:
          job_data: Job data dictionary from qstat JSON
          server_defaults: Server resource defaults (optional, will fetch if not provided)
          server_data: Pre-fetched server data (optional, will fetch if not provided)
-         
+
       Returns:
          Calculated job score or None if calculation fails
       """
@@ -625,53 +625,67 @@ class PBSCommands:
          # Get server data if not provided (for both formula and defaults)
          if server_data is None:
             server_data = self.qstat_server()
-         
+
          # Get the job sort formula
          formula = self.get_job_sort_formula(server_data=server_data)
          if not formula:
             self.logger.warning("No job sort formula available")
             return None
-         
+
          # Get server defaults if not provided
          if server_defaults is None:
             server_info = server_data.get("Server", {})
             for server_name, server_details in server_info.items():
                server_defaults = server_details.get("resources_default", {})
                break
-         
+
          if not server_defaults:
             self.logger.warning("No server defaults available")
             return None
-         
+
          # Extract parameters from job data
          resource_list = job_data.get("Resource_List", {})
-         
-         # Build the variables dictionary for the formula
-         variables = {
-            # From job data
-            "base_score": int(resource_list.get("base_score", server_defaults.get("base_score", 0))),
-            "score_boost": int(resource_list.get("score_boost", server_defaults.get("score_boost", 0))),
-            "enable_wfp": int(resource_list.get("enable_wfp", server_defaults.get("enable_wfp", 0))),
-            "wfp_factor": int(resource_list.get("wfp_factor", server_defaults.get("wfp_factor", 100000))),
-            "enable_backfill": int(resource_list.get("enable_backfill", server_defaults.get("enable_backfill", 0))),
-            "backfill_max": int(resource_list.get("backfill_max", server_defaults.get("backfill_max", 50))),
-            "backfill_factor": int(resource_list.get("backfill_factor", server_defaults.get("backfill_factor", 84600))),
-            "enable_fifo": int(resource_list.get("enable_fifo", server_defaults.get("enable_fifo", 1))),
-            "fifo_factor": int(resource_list.get("fifo_factor", server_defaults.get("fifo_factor", 1800))),
-            "project_priority": int(resource_list.get("project_priority", 1)),
-            "nodect": int(resource_list.get("nodect", 1)),
-            "total_cpus": int(resource_list.get("total_cpus", server_defaults.get("total_cpus", 1))),
-            "walltime": self._parse_walltime_to_seconds(resource_list.get("walltime", "01:00:00")),
-         }
-         
-         # Calculate eligible_time (time since job was queued)
-         eligible_time_str = job_data.get("eligible_time", "00:00:00")
-         variables["eligible_time"] = self._parse_eligible_time_to_seconds(eligible_time_str)
-         
-         # Add math functions for the formula
+
+         # Parse the formula to extract variable names dynamically
+         variable_names = self._extract_formula_variables(formula)
+
+         # Build the variables dictionary dynamically
+         variables = {}
+
+         # Add built-in functions needed for formula evaluation
          variables["min"] = min
          variables["max"] = max
-         
+
+         # Special handling for variables that need parsing/transformation
+         special_vars = {
+            "eligible_time": lambda: self._parse_eligible_time_to_seconds(job_data.get("eligible_time", "00:00:00")),
+            "walltime": lambda: self._parse_walltime_to_seconds(resource_list.get("walltime", server_defaults.get("walltime", "01:00:00"))),
+         }
+
+         missing_vars = []
+         for var_name in variable_names:
+            if var_name in variables:
+               # Already added (min, max)
+               continue
+            elif var_name in special_vars:
+               # Special handling required
+               variables[var_name] = special_vars[var_name]()
+            elif var_name in resource_list:
+               # Get from job's Resource_List
+               variables[var_name] = self._coerce_numeric(resource_list[var_name])
+            elif var_name in server_defaults:
+               # Get from server defaults
+               variables[var_name] = self._coerce_numeric(server_defaults[var_name])
+            else:
+               missing_vars.append(var_name)
+
+         if missing_vars:
+            self.logger.error(f"Formula references undefined variables: {missing_vars}")
+            self.logger.error(f"Formula: {formula}")
+            self.logger.error(f"Available in Resource_List: {list(resource_list.keys())}")
+            self.logger.error(f"Available in server_defaults: {list(server_defaults.keys())}")
+            return None
+
          # Evaluate the formula
          try:
             score = eval(formula, {"__builtins__": {}}, variables)
@@ -681,10 +695,53 @@ class PBSCommands:
             self.logger.error(f"Formula: {formula}")
             self.logger.error(f"Variables: {variables}")
             return None
-         
+
       except Exception as e:
          self.logger.error(f"Failed to calculate job score: {str(e)}")
          return None
+
+   def _extract_formula_variables(self, formula: str) -> set:
+      """
+      Extract variable names from a formula string.
+
+      Args:
+         formula: The job sort formula string
+
+      Returns:
+         Set of variable names found in the formula
+      """
+      # Match valid Python identifiers that aren't numeric literals
+      # This regex finds word sequences that start with a letter or underscore
+      import re
+      tokens = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', formula)
+
+      # Filter out Python keywords and built-in function names we handle separately
+      excluded = {'min', 'max', 'True', 'False', 'None', 'and', 'or', 'not', 'if', 'else'}
+      return set(tokens) - excluded
+
+   def _coerce_numeric(self, value: Any) -> Union[int, float]:
+      """
+      Coerce a value to a numeric type for formula evaluation.
+
+      Args:
+         value: The value to coerce
+
+      Returns:
+         Integer or float representation of the value
+      """
+      if isinstance(value, (int, float)):
+         return value
+
+      try:
+         # Try integer first
+         str_val = str(value)
+         if '.' in str_val:
+            return float(str_val)
+         return int(str_val)
+      except (ValueError, TypeError):
+         # If it's a time string like walltime, this will fail
+         # but walltime should be handled by special_vars
+         return 0
    
    def _parse_walltime_to_seconds(self, walltime_str: str) -> float:
       """
