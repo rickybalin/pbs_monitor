@@ -950,9 +950,11 @@ class DataCollector:
          
          # Also collect recently completed jobs to capture them before PBS purges them
          completed_jobs = []
+         history_check_succeeded = False
          try:
             pbs_completed = self.pbs_commands.qstat_completed_jobs()
             completed_jobs.extend(pbs_completed)
+            history_check_succeeded = True
             self.logger.debug(f"Collected {len(pbs_completed)} completed jobs from PBS history")
          except Exception as e:
             error_msg = str(e)
@@ -996,8 +998,13 @@ class DataCollector:
          self._cleanup_job_state_cache(current_job_ids)
          self._cleanup_reservation_state_cache(current_reservation_ids)
          
-         # Detect and handle orphaned jobs (active in DB but missing from PBS)
-         self._detect_and_handle_orphaned_jobs(current_job_ids)
+         # Detect and handle orphaned jobs (active in DB but missing from PBS).
+         # Skip if the history check failed: without qstat -x data the "seen" set
+         # is incomplete and we risk prematurely marking jobs as UNKNOWN_END.
+         if history_check_succeeded:
+            self._detect_and_handle_orphaned_jobs(current_job_ids)
+         else:
+            self.logger.warning("Skipping orphaned job detection: qstat history check failed")
          
          # Check for recovery of previously orphaned jobs
          self._check_for_orphaned_job_recovery(all_jobs_for_db)

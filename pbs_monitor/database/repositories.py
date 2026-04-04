@@ -91,6 +91,10 @@ class JobRepository(BaseRepository):
             if job:
                 job.state = JobState.UNKNOWN_END
                 job.final_state_recorded = True
+                # Estimate end_time as last_updated (last time job was seen in PBS)
+                # so utilization plots can include this job's contribution.
+                if job.end_time is None and job.last_updated is not None:
+                    job.end_time = job.last_updated
                 job.last_updated = func.now()
                 session.commit()
                 return True
