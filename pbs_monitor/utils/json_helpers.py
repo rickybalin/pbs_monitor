@@ -14,6 +14,7 @@ from ..config import Config
 
 logger = logging.getLogger(__name__)
 
+
 def load_json_safe(
     json_str: str, 
     context_name: str, 
@@ -43,10 +44,8 @@ def load_json_safe(
         return json.loads(json_str)
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse JSON at line {e.lineno}, column {e.colno}")
-        ln = e.lineno
         cn = e.colno
-        logger.error("content before: \n",original[cn-100:cn+100])
-        logger.error("\ncontent after: \n",jsonstr[cn-100:cn+100])
+        logger.error("content around error: %r", json_str[max(0,cn-100):cn+100])
         # Determine output directory
         if output_dir is None:
             try:

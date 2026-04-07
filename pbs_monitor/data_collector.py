@@ -948,14 +948,22 @@ class DataCollector:
          # Collect all data
          self.refresh_all()
          
-         # Also collect recently completed jobs to capture them before PBS purges them
+         # Check history for jobs that were active in DB but are no longer in the live PBS snapshot.
+         # Query only those specific job IDs rather than the full history to avoid fetching
+         # a very large JSON response that may fail to parse.
          completed_jobs = []
          history_check_succeeded = False
          try:
-            pbs_completed = self.pbs_commands.qstat_completed_jobs()
-            completed_jobs.extend(pbs_completed)
+            current_pbs_job_ids = {job.job_id for job in self._jobs}
+            job_repo = self._repository_factory.get_job_repository()
+            active_db_jobs = job_repo.get_active_jobs()
+            missing_job_ids = [j.job_id for j in active_db_jobs if j.job_id not in current_pbs_job_ids]
+            if missing_job_ids:
+               self.logger.debug(f"Checking history for {len(missing_job_ids)} jobs absent from live PBS snapshot")
+               pbs_completed = self.pbs_commands.qstat_completed_jobs(job_ids=missing_job_ids)
+               completed_jobs.extend(pbs_completed)
+               self.logger.debug(f"Collected {len(pbs_completed)} completed jobs from PBS history")
             history_check_succeeded = True
-            self.logger.debug(f"Collected {len(pbs_completed)} completed jobs from PBS history")
          except Exception as e:
             error_msg = str(e)
             if "utf-8" in error_msg.lower() and "decode" in error_msg.lower():

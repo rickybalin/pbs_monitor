@@ -2053,45 +2053,23 @@ class UsageInsights:
 
    def _get_total_nodes_from_pbs(self) -> Optional[int]:
       """
-      Get the total number of nodes from PBS using pbsnodes JSON output.
-      
+      Get the total number of nodes from PBS using pbsnodes.
+
+      Uses PBSCommands.pbsnodes() which handles JSON preprocessing
+      (control-character stripping, unescaped-quote fixing, non-UTF-8
+      byte removal) so that malformed PBS output is handled consistently.
+
       Returns the count of nodes from the PBS system, or None if unavailable.
       """
       try:
-         # Use PBSCommands to get raw node data as JSON
          pbs_commands = PBSCommands(use_sample_data=False)
-         
-         # Get the raw JSON data directly
-         import subprocess
-         result = subprocess.run(
-            ['pbsnodes', '-a', '-F', 'json'],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30
-         )
-         
-         if result.returncode == 0:
-            # import json
-            node_data = load_json_safe(result.stdout, "usage_insights_pbsnodes")
-            total_nodes = len(node_data.get('nodes', {}))
-            
-            if total_nodes > 0:
-               self.logger.debug(f"Found {total_nodes} total nodes from pbsnodes")
-               return total_nodes
-            else:
-               self.logger.warning("No nodes found in pbsnodes output")
-               return None
+         nodes = pbs_commands.pbsnodes()
+         if nodes:
+            self.logger.debug(f"Found {len(nodes)} total nodes from pbsnodes")
+            return len(nodes)
          else:
-            self.logger.warning("pbsnodes command failed")
+            self.logger.warning("No nodes found from pbsnodes")
             return None
-            
-      except subprocess.TimeoutExpired:
-         self.logger.warning("pbsnodes command timed out")
-         return None
-      except json.JSONDecodeError as e:
-         self.logger.warning(f"Failed to parse pbsnodes JSON output: {e}")
-         return None
       except Exception as e:
          self.logger.warning(f"Failed to get node count from PBS: {e}")
          return None

@@ -69,21 +69,26 @@ class PBSCommands:
                check=False
             )
          except UnicodeDecodeError as e:
-            # If UTF-8 fails, try with more permissive encoding
+            # If UTF-8 strict fails, re-run and silently drop bad bytes.
+            # PBS can emit non-UTF-8 characters in user-supplied fields
+            # (job names, comments, etc.).  Latin-1 fallback preserves them
+            # but they then break JSON parsing, so just drop them.
             self.logger.warning(f"UTF-8 decoding failed for command {' '.join(command)}: {str(e)}")
-            self.logger.info("Retrying with permissive encoding (latin-1)...")
-            
+            self.logger.info("Retrying with non-UTF-8 bytes removed...")
+
             result = subprocess.run(
                command,
                capture_output=True,
-               text=True,
-               encoding='latin-1',  # More permissive encoding
-               errors='replace',    # Replace invalid characters with replacement character
                timeout=cmd_timeout,
                check=False
             )
-            
-            self.logger.info("Command completed with permissive encoding (some characters may be replaced)")
+            # Decode manually, dropping invalid bytes
+            result.stdout = result.stdout.decode('utf-8', errors='ignore')
+            result.stderr = result.stderr.decode('utf-8', errors='ignore')
+            # Monkey-patch so downstream code sees strings
+            result.encoding = 'utf-8'
+
+            self.logger.info("Command completed with non-UTF-8 bytes removed")
          
          # Log both stdout and stderr for debugging
          if result.stdout:
@@ -134,8 +139,11 @@ class PBSCommands:
       # "output": "/home/parton/pbs_monitor/tests/verify_array_index_filtering.py^array_index^"
       cleaned_output = cleaned_output.replace("^array_index^\\", "")
 
-      # Replace unescaped quotes within the PS1 value
-      cleaned_output = cleaned_output.replace('%1{^"^Þ^Ü%}', '%1{^\\"^Þ^Ü%}')
+      # PBS uses ^X^ notation for control characters in user-supplied fields
+      # (job names, comments, etc.).  When X is a double-quote this produces
+      # an unescaped " inside a JSON string value, breaking the parser.
+      # Escape any double-quote that appears between two carets: ^"^ → ^\"^
+      cleaned_output = cleaned_output.replace('^"^', '^\\"^')
 
       # Fix unquoted large numeric values that start with 0
       # Pattern: "field_name":0000000000000000000000000000000000000000,
@@ -295,15 +303,18 @@ class PBSCommands:
       
       return jobs
    
-   def qstat_completed_jobs(self, user: Optional[str] = None, project: Optional[str] = None, days: int = 7) -> List[PBSJob]:
+   def qstat_completed_jobs(self, user: Optional[str] = None, project: Optional[str] = None, days: int = 7,
+                            job_ids: Optional[List[str]] = None) -> List[PBSJob]:
       """
       Get completed job information using qstat -x
-      
+
       Args:
          user: Filter by username
          project: Filter by project name (partial string matching, case-sensitive)
          days: Number of days back to look for completed jobs
-         
+         job_ids: If provided, query only these specific job IDs instead of full history.
+                  This avoids fetching the entire (potentially very large) PBS history.
+
       Returns:
          List of PBSJob objects representing completed jobs
       """
@@ -316,16 +327,34 @@ class PBSCommands:
       else:
          # Note: We don't use -u option because it causes PBS to return tabular format instead of JSON
          # User filtering is done in Python after parsing the JSON
-         command = ["/opt/pbs/bin/qstat", "-x", "-f", "-F", "json"]
-         
-         try:
-            output = self._run_command(command)
-            data = self._parse_json_output(output, "qstat completed jobs")
-            
-         except PBSCommandError:
-            raise
-         except Exception as e:
-            raise PBSCommandError(f"Failed to get completed job information: {str(e)}")
+         if job_ids:
+            # Query only specific job IDs — much smaller output than full history.
+            # Batch into chunks of 100 to avoid command-line length limits.
+            all_jobs_data: dict = {}
+            chunk_size = 100
+            for i in range(0, len(job_ids), chunk_size):
+               chunk = job_ids[i:i + chunk_size]
+               command = ["/opt/pbs/bin/qstat", "-x", "-f", "-F", "json"] + chunk
+               try:
+                  output = self._run_command(command)
+                  chunk_data = self._parse_json_output(output, "qstat completed jobs")
+                  all_jobs_data.update(chunk_data.get("Jobs", {}))
+               except PBSCommandError as e:
+                  # Individual job IDs that no longer exist in PBS history will cause errors;
+                  # log and continue so the other chunks still succeed.
+                  self.logger.debug(f"qstat chunk failed (jobs may no longer be in history): {e}")
+               except Exception as e:
+                  raise PBSCommandError(f"Failed to get completed job information: {str(e)}")
+            data = {"Jobs": all_jobs_data}
+         else:
+            command = ["/opt/pbs/bin/qstat", "-x", "-f", "-F", "json"]
+            try:
+               output = self._run_command(command)
+               data = self._parse_json_output(output, "qstat completed jobs")
+            except PBSCommandError:
+               raise
+            except Exception as e:
+               raise PBSCommandError(f"Failed to get completed job information: {str(e)}")
       
       jobs = []
       jobs_data = data.get("Jobs", {})
