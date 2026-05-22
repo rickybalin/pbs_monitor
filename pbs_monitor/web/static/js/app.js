@@ -175,8 +175,18 @@ createApp({
             jobToIndices = new Map();
             for (const job of (snapshot.value?.jobs?.running || [])) {
                 const indices = job.node_indices || [];
-                jobToIndices.set(job.job_id, new Set(indices));
-                for (const idx of indices) nodeToJobMap.set(idx, job.job_id);
+                // Store as Set of positions in our layout (0-based into node_index)
+                const layoutPositions = new Set();
+                const snapIndices = systemInfo.value?.snapshot_indices || [];
+                for (const snapIdx of indices) {
+                    // Find which layout position has this snapshot_index
+                    const pos = snapIndices.indexOf(snapIdx);
+                    if (pos !== -1) {
+                        layoutPositions.add(pos);
+                        nodeToJobMap.set(pos, job.job_id);
+                    }
+                }
+                jobToIndices.set(job.job_id, layoutPositions);
             }
         }
 
@@ -256,6 +266,7 @@ createApp({
             if (!canvas || layout.length === 0) return;
             const ctx = canvas.getContext('2d');
             const stateStr = snapshot.value?.state_string || '';
+            const snapIndices = systemInfo.value?.snapshot_indices || [];
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -266,7 +277,9 @@ createApp({
                     : null;
 
             for (const cell of layout) {
-                const ch = stateStr[cell.idx] || '0';
+                // Map layout position → snapshot_data index
+                const snapIdx = snapIndices[cell.idx];
+                const ch = (snapIdx != null) ? (stateStr[snapIdx] || '0') : '0';
                 let color = STATE_COLORS[ch] || FALLBACK_COLOR;
 
                 if ('EFL'.includes(ch)) {
@@ -307,8 +320,10 @@ createApp({
             if (!cell) { tooltip.visible = false; return; }
 
             const nodeIndex = systemInfo.value?.node_index || [];
+            const snapIndices = systemInfo.value?.snapshot_indices || [];
             const stateStr  = snapshot.value?.state_string || '';
-            const ch = stateStr[cell.idx] || '?';
+            const snapIdx = snapIndices[cell.idx];
+            const ch = (snapIdx != null) ? (stateStr[snapIdx] || '?') : '?';
 
             tooltip.nodeName = nodeIndex[cell.idx] || `node-${cell.idx}`;
             tooltip.state    = STATE_CHAR_LABELS[ch] || ch;

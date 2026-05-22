@@ -99,15 +99,17 @@ def _build_topology(db: Session) -> dict:
     return {"rack_names": rack_names, "nodes_per_rack": nodes_per_rack}
 
 
-def _build_node_index(db: Session) -> list[str]:
-    """Ordered list of all node names by snapshot_index (compute nodes only)."""
+def _build_node_index(db: Session) -> tuple[list[str], list[int]]:
+    """Ordered compute node names and their snapshot_data indices."""
     rows = (
-        db.query(Node.name)
+        db.query(Node.name, Node.snapshot_index)
         .filter(Node.name.like('x%'))
         .order_by(Node.snapshot_index)
         .all()
     )
-    return [r.name for r in rows]
+    names = [r.name for r in rows]
+    indices = [r.snapshot_index for r in rows]
+    return names, indices
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +159,7 @@ def create_app(config=None) -> FastAPI:
         system_name = _detect_system_name(db)
         total_nodes = db.query(func.count(Node.name)).filter(Node.name.like('x%')).scalar() or 0
         topology = _build_topology(db)
-        node_index = _build_node_index(db)
+        node_names, snapshot_indices = _build_node_index(db)
 
         last_log = (
             db.query(DataCollectionLog.timestamp)
@@ -169,7 +171,8 @@ def create_app(config=None) -> FastAPI:
             "system_name": system_name,
             "total_nodes": total_nodes,
             "topology": topology,
-            "node_index": node_index,
+            "node_index": node_names,
+            "snapshot_indices": snapshot_indices,
             "last_collection": last_log[0].isoformat() if last_log else None,
         }
         _system_cache.update(info)
@@ -178,6 +181,10 @@ def create_app(config=None) -> FastAPI:
     @app.get("/api/snapshot")
     def api_snapshot(db: Session = Depends(get_db)):
         now = datetime.now(timezone.utc)
+
+        # Ensure system cache is populated (needed for snapshot_indices)
+        if not _system_cache:
+            get_system_info(db)
 
         # --- freshest data timestamp ---
         latest_collection = (
@@ -199,11 +206,14 @@ def create_app(config=None) -> FastAPI:
         )
         state_string = node_snap.snapshot_data if node_snap else ""
 
-        # State counts
+        # State counts — only for compute nodes (use their snapshot indices)
+        compute_indices = _system_cache.get("snapshot_indices", [])
         state_counts: dict[str, int] = {}
-        for ch in state_string:
-            label = STATE_CHAR_LABELS.get(ch, "unknown")
-            state_counts[label] = state_counts.get(label, 0) + 1
+        for si in compute_indices:
+            if si < len(state_string):
+                ch = state_string[si]
+                label = STATE_CHAR_LABELS.get(ch, "unknown")
+                state_counts[label] = state_counts.get(label, 0) + 1
 
         # --- node name → snapshot_index lookup (compute nodes only) ---
         node_map: dict[str, int] = {
