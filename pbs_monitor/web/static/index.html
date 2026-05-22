@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PBS Monitor Dashboard</title>
+    <link rel="stylesheet" href="css/dashboard.css">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+</head>
+<body>
+<div id="app">
+    <!-- Loading -->
+    <div v-if="loading" class="loading-overlay">
+        <div class="spinner"></div>
+        <p>Connecting to PBS Monitor…</p>
+    </div>
+
+    <!-- Error (only if we never got data) -->
+    <div v-else-if="error && !snapshot" class="error-overlay">
+        <h2>Connection Error</h2>
+        <p>{{ error }}</p>
+        <button @click="fetchData">Retry</button>
+    </div>
+
+    <!-- Dashboard -->
+    <div v-else class="dashboard-container">
+        <!-- ─── Header ─────────────────────────────────────────────── -->
+        <header class="header-bar">
+            <div class="header-left">
+                <h1>{{ systemName }}</h1>
+                <div class="freshness-indicator" :class="freshnessClass">
+                    <span class="dot"></span>
+                    {{ timeSinceLastUpdate }}
+                </div>
+            </div>
+            <div class="header-stats">
+                <div class="stat-item hero">
+                    <span class="label">Utilization</span>
+                    <span class="value">{{ utilization }}%</span>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="stat-item">
+                    <span class="label">Running</span>
+                    <span class="value count-running">{{ jobs.running }}</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">Queued</span>
+                    <span class="value count-queued">{{ jobs.queued }}</span>
+                </div>
+                <div class="stat-item">
+                    <span class="label">Held</span>
+                    <span class="value count-held">{{ jobs.held }}</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- ─── Main ───────────────────────────────────────────────── -->
+        <main class="main-content">
+            <!-- Node Map -->
+            <section class="panel node-map-panel">
+                <div class="panel-header">
+                    <h2>Node Map</h2>
+                    <div class="legend">
+                        <span class="legend-item"><i class="color-box" style="background:#4ade80"></i>Free</span>
+                        <span class="legend-item"><i class="color-box" style="background:#3b82f6"></i>Job</span>
+                        <span class="legend-item"><i class="color-box" style="background:#a855f7"></i>Resv</span>
+                        <span class="legend-item"><i class="color-box" style="background:#ef4444"></i>Down</span>
+                        <span class="legend-item"><i class="color-box" style="background:#6b7280"></i>Offline</span>
+                    </div>
+                </div>
+                <div class="canvas-container" ref="mapContainer"
+                     @mousemove="onCanvasMove"
+                     @mouseleave="onCanvasLeave"
+                     @click="onCanvasClick">
+                    <canvas ref="nodeCanvas"></canvas>
+                    <div v-if="tooltip.visible" class="tooltip" :style="tooltipStyle">
+                        <strong>{{ tooltip.nodeName }}</strong><br>
+                        State: {{ tooltip.state }}
+                        <template v-if="tooltip.jobId">
+                            <br>Job: {{ tooltip.jobId }}
+                            <br>Owner: {{ tooltip.owner }}
+                            <br>Project: {{ tooltip.project }}
+                            <br>Queue: {{ tooltip.queue }}
+                        </template>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Running Jobs Table -->
+            <section class="panel jobs-panel">
+                <div class="panel-header">
+                    <h2>Running Jobs ({{ jobs.running }})</h2>
+                </div>
+                <div class="table-wrapper">
+                    <table class="jobs-table">
+                        <thead>
+                            <tr>
+                                <th @click="sortJobs('job_id')">ID</th>
+                                <th @click="sortJobs('name')">Name</th>
+                                <th @click="sortJobs('owner')">Owner</th>
+                                <th @click="sortJobs('project')">Project</th>
+                                <th @click="sortJobs('queue')">Queue</th>
+                                <th @click="sortJobs('nodes')">Nodes</th>
+                                <th @click="sortJobs('elapsed_seconds')">Elapsed</th>
+                                <th @click="sortJobs('remaining_seconds')">Remaining</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="job in sortedJobs" :key="job.job_id"
+                                :id="'job-row-' + job.job_id"
+                                @mouseenter="highlightJob(job.job_id)"
+                                @mouseleave="clearHighlight"
+                                @click="selectJob(job.job_id)"
+                                :class="{ 'job-row-highlight': selectedJobId === job.job_id }">
+                                <td>{{ job.job_id }}</td>
+                                <td class="job-name">{{ job.name }}</td>
+                                <td>{{ job.owner }}</td>
+                                <td>{{ job.project }}</td>
+                                <td><span class="queue-badge" :style="{ backgroundColor: queueColor(job.queue) }">{{ job.queue }}</span></td>
+                                <td>{{ job.nodes }}</td>
+                                <td>{{ fmtDuration(job.elapsed_seconds) }}</td>
+                                <td :class="{ 'text-danger': isOverdue(job) }">
+                                    {{ isOverdue(job) ? 'overdue' : fmtDuration(job.remaining_seconds) }}
+                                </td>
+                            </tr>
+                            <tr v-if="sortedJobs.length === 0">
+                                <td colspan="8" class="empty-row">No running jobs</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+
+        <!-- ─── Queue Status ───────────────────────────────────────── -->
+        <footer class="footer-section">
+            <div class="panel queue-status-panel">
+                <div class="panel-header">
+                    <h2>Queue Status</h2>
+                    <span class="queue-legend">
+                        <span class="c-run">■ running</span>
+                        <span class="c-que">■ queued</span>
+                        <span class="c-hel">■ held</span>
+                    </span>
+                </div>
+                <div class="queue-bars">
+                    <div v-for="q in sortedQueues" :key="q.name" class="queue-bar-row">
+                        <span class="queue-name">{{ q.name }}</span>
+                        <div class="bar-container">
+                            <div class="bar-segment running" :style="{ width: q.runningPct + '%' }" :title="'Running: ' + q.running"></div>
+                            <div class="bar-segment queued"  :style="{ width: q.queuedPct  + '%' }" :title="'Queued: '  + q.queued"></div>
+                            <div class="bar-segment held"    :style="{ width: q.heldPct    + '%' }" :title="'Held: '    + q.held"></div>
+                        </div>
+                        <span class="queue-counts">
+                            <span class="c-run">{{ q.running }}</span> /
+                            <span class="c-que">{{ q.queued }}</span> /
+                            <span class="c-hel">{{ q.held }}</span>
+                        </span>
+                    </div>
+                    <div v-if="sortedQueues.length === 0" class="empty-row" style="padding:1rem">No active queues</div>
+                </div>
+            </div>
+        </footer>
+    </div>
+</div>
+
+<script src="js/app.js"></script>
+</body>
+</html>

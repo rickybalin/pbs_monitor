@@ -28,4 +28,8 @@ flake8>=5.0.0
 
 # Future ML dependencies (optional, for prediction features)
 # torch>=1.13.0
-# scikit-learn>=1.2.0 
+# scikit-learn>=1.2.0
+
+# Web dashboard
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
