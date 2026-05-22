@@ -339,7 +339,7 @@ def create_app(config=None) -> FastAPI:
                 "running_jobs": sys_snap.running_jobs if sys_snap else len(running_jobs),
                 "queued_jobs": sys_snap.queued_jobs if sys_snap else sum(queued_by_q.values()),
                 "held_jobs": sys_snap.held_jobs if sys_snap else sum(held_by_q.values()),
-                "utilization_percent": round((sys_snap.system_utilization_percent or 0) * 100, 1) if sys_snap else 0,
+                "utilization_percent": round(sys_snap.system_utilization_percent or 0, 1) if sys_snap else 0,
                 "total_nodes": sys_snap.total_nodes if sys_snap else 0,
                 "available_nodes": sys_snap.available_nodes if sys_snap else 0,
             },
