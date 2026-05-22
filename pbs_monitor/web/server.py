@@ -151,8 +151,8 @@ def create_app(config=None) -> FastAPI:
     # ---- cached system info ----
     _system_cache: dict[str, Any] = {}
 
-    @app.get("/api/system")
-    def api_system(db: Session = Depends(get_db)):
+    def _populate_system_cache(db: Session) -> dict[str, Any]:
+        """Build and cache system info."""
         if _system_cache:
             return _system_cache
 
@@ -178,13 +178,17 @@ def create_app(config=None) -> FastAPI:
         _system_cache.update(info)
         return info
 
+    @app.get("/api/system")
+    def api_system(db: Session = Depends(get_db)):
+        return _populate_system_cache(db)
+
     @app.get("/api/snapshot")
     def api_snapshot(db: Session = Depends(get_db)):
         now = datetime.now(timezone.utc)
 
         # Ensure system cache is populated (needed for snapshot_indices)
         if not _system_cache:
-            get_system_info(db)
+            _populate_system_cache(db)
 
         # --- freshest data timestamp ---
         latest_collection = (
