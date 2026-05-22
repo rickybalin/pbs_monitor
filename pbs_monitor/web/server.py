@@ -215,16 +215,35 @@ def _build_node_index(db: Session) -> tuple[list[str], list[int]]:
 # App factory — called by the CLI `web` command
 # ---------------------------------------------------------------------------
 
-def create_app(config=None, job_sort_formula: str | None = None) -> FastAPI:
-    """Create and configure the FastAPI application.
+def _load_pbs_score_config() -> tuple[str | None, dict[str, Any]]:
+    """Attempt to load the job sort formula and server defaults from PBS.
 
-    Args:
-        config: Optional Config object (auto-loaded if None).
-        job_sort_formula: PBS job_sort_formula string for score calculation.
-            If provided, scores are computed using this formula; otherwise
-            falls back to eligible_time in seconds.
+    Returns (formula, server_defaults).  Both may be None/empty if PBS
+    commands are unavailable (e.g. running on a non-login-node machine).
     """
-    _job_formula = job_sort_formula
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        from pbs_monitor.pbs_commands import PBSCommands
+        pbs = PBSCommands(timeout=10)
+        server_data = pbs.qstat_server()
+        formula = pbs.get_job_sort_formula(server_data=server_data)
+        # Extract server resource defaults
+        server_defaults: dict[str, Any] = {}
+        server_info = server_data.get("Server", {})
+        for _name, details in server_info.items():
+            server_defaults = details.get("resources_default", {})
+            break
+        if formula:
+            log.info(f"Loaded PBS job sort formula: {formula}")
+        return formula, server_defaults
+    except Exception as e:
+        log.info(f"PBS commands unavailable, scores will use eligible_time fallback: {e}")
+        return None, {}
+
+
+def create_app(config=None) -> FastAPI:
+    """Create and configure the FastAPI application."""
     # Resolve database URL
     if config is None:
         from pbs_monitor.config import Config
@@ -234,6 +253,14 @@ def create_app(config=None, job_sort_formula: str | None = None) -> FastAPI:
     connect_args: dict[str, Any] = {}
     if db_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
+
+    # Load PBS score formula and server defaults at startup
+    _job_formula, _pbs_server_defaults = _load_pbs_score_config()
+    if _pbs_server_defaults:
+        _SERVER_DEFAULTS.update({
+            k: _coerce_int(v) for k, v in _pbs_server_defaults.items()
+            if k in _SERVER_DEFAULTS
+        })
 
     engine = create_engine(db_url, connect_args=connect_args)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -281,6 +308,7 @@ def create_app(config=None, job_sort_formula: str | None = None) -> FastAPI:
             "node_index": node_names,
             "snapshot_indices": snapshot_indices,
             "last_collection": last_log[0].isoformat() if last_log else None,
+            "job_sort_formula": _job_formula,
         }
         _system_cache.update(info)
         return info
