@@ -75,6 +75,8 @@ createApp({
         const activeTab    = ref('running');
         const sortKey      = ref('nodes');
         const sortDesc     = ref(true);
+        const queuedSortKey  = ref('score');
+        const queuedSortDesc = ref(true);
         const selectedJobId = ref(null);
         const hoveredJobId  = ref(null);
 
@@ -90,13 +92,14 @@ createApp({
         // ── derived ──
 
         const systemName = computed(() => systemInfo.value?.system_name || 'PBS Monitor');
-        const utilization = computed(() => {
+        const busyNodes = computed(() => {
             const counts = snapshot.value?.state_counts || {};
+            return (counts['job-exclusive'] || 0) + (counts['job-sharing'] || 0) + (counts['job-exclusive,resv-exclusive'] || 0);
+        });
+        const utilization = computed(() => {
             const total = totalComputeNodes.value;
             if (!total) return 0;
-            // Count nodes running jobs (job-exclusive + job-sharing + job-exclusive,resv-exclusive)
-            const busy = (counts['job-exclusive'] || 0) + (counts['job-sharing'] || 0) + (counts['job-exclusive,resv-exclusive'] || 0);
-            return Math.round(busy / total * 100);
+            return Math.round(busyNodes.value / total * 100);
         });
         const totalComputeNodes = computed(() => (systemInfo.value?.node_index || []).length);
         const stateCounts = computed(() => snapshot.value?.state_counts || {});
@@ -134,13 +137,34 @@ createApp({
         }
 
         const sortedRunningJobs = computed(() => sortedList(snapshot.value?.jobs?.running || []));
-        const sortedQueuedJobs  = computed(() => sortedList(snapshot.value?.jobs?.queued  || []));
+        const sortedQueuedJobs  = computed(() => {
+            const list = snapshot.value?.jobs?.queued || [];
+            const key = queuedSortKey.value;
+            return [...list].sort((a, b) => {
+                let va = a[key] ?? '';
+                let vb = b[key] ?? '';
+                // nulls last
+                if (va == null && vb == null) return 0;
+                if (va == null) return 1;
+                if (vb == null) return -1;
+                if (typeof va === 'string') va = va.toLowerCase();
+                if (typeof vb === 'string') vb = vb.toLowerCase();
+                if (va < vb) return queuedSortDesc.value ? 1 : -1;
+                if (va > vb) return queuedSortDesc.value ? -1 : 1;
+                return 0;
+            });
+        });
 
-        const sortedQueues = computed(() =>
-            [...(snapshot.value?.queues || [])]
-                .filter(q => q.total > 0)
-                .sort((a, b) => b.total - a.total)
-        );
+        const sortedQueues = computed(() => {
+            const qs = [...(snapshot.value?.queues || [])].filter(q => q.total > 0).sort((a, b) => b.total - a.total);
+            const maxTotal = qs.length > 0 ? Math.max(...qs.map(q => q.total)) : 1;
+            return qs.map(q => ({
+                ...q,
+                runningPctScaled: (q.running / maxTotal * 100).toFixed(1),
+                queuedPctScaled:  (q.queued  / maxTotal * 100).toFixed(1),
+                heldPctScaled:    (q.held    / maxTotal * 100).toFixed(1),
+            }));
+        });
 
         // ── data fetching ──
 
@@ -370,6 +394,17 @@ createApp({
             if (sortKey.value === key) sortDesc.value = !sortDesc.value;
             else { sortKey.value = key; sortDesc.value = true; }
         }
+        function sortQueuedJobs(key) {
+            if (queuedSortKey.value === key) queuedSortDesc.value = !queuedSortDesc.value;
+            else { queuedSortKey.value = key; queuedSortDesc.value = true; }
+        }
+        function fmtScore(score) {
+            if (score == null) return '--';
+            // Score is eligible_time in seconds; show as hours
+            const h = score / 3600;
+            if (h >= 24) return (h / 24).toFixed(1) + 'd';
+            return h.toFixed(1) + 'h';
+        }
         function highlightJob(jid) { hoveredJobId.value = jid; requestAnimationFrame(drawMap); }
         function clearHighlight()   { hoveredJobId.value = null; requestAnimationFrame(drawMap); }
         function selectJob(jid)     { selectedJobId.value = (selectedJobId.value === jid) ? null : jid; requestAnimationFrame(drawMap); }
@@ -400,13 +435,13 @@ createApp({
 
         return {
             systemInfo, snapshot, loading, error,
-            activeTab, sortKey, sortDesc, selectedJobId, hoveredJobId,
+            activeTab, sortKey, sortDesc, queuedSortKey, queuedSortDesc, selectedJobId, hoveredJobId,
             nodeCanvas, mapContainer, tooltip, tooltipStyle,
-            systemName, utilization, totalComputeNodes, stateCounts, jobCounts, freshnessClass, timeSinceLastUpdate,
+            systemName, utilization, busyNodes, totalComputeNodes, stateCounts, jobCounts, freshnessClass, timeSinceLastUpdate,
             sortedRunningJobs, sortedQueuedJobs, sortedQueues,
-            fetchData, sortJobs, selectJob, highlightJob, clearHighlight, isOverdue,
+            fetchData, sortJobs, sortQueuedJobs, selectJob, highlightJob, clearHighlight, isOverdue,
             onCanvasMove, onCanvasLeave, onCanvasClick,
-            fmtDuration, queueColor,
+            fmtDuration, fmtScore, queueColor,
         };
     }
 }).mount('#app');

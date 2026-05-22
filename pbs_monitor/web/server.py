@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 import re
 
+import json as _json
+
 from pbs_monitor.database.models import (
     Job, JobState, Node, NodeSnapshot, SystemSnapshot,
     DataCollectionLog,
@@ -65,6 +67,37 @@ def _parse_execution_nodes(exec_node: str | None) -> list[str]:
         if name:
             names.append(name)
     return names
+
+
+def _parse_eligible_time(et: str | None) -> int:
+    """Parse PBS eligible_time 'HH:MM:SS' to seconds."""
+    if not et:
+        return 0
+    try:
+        parts = et.split(':')
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+    except (ValueError, IndexError):
+        return 0
+
+
+def _extract_job_score(job) -> float | None:
+    """Compute approximate scheduling score from raw PBS data.
+
+    PBS uses a configurable job_sort_formula. The most common formula on
+    Polaris is based on eligible_time (seconds the job has been eligible
+    to run). We compute: eligible_time_seconds as the score, which
+    mirrors the dominant scheduler ordering.
+    """
+    if not job.raw_pbs_data:
+        return None
+    try:
+        raw = _json.loads(job.raw_pbs_data) if isinstance(job.raw_pbs_data, str) else job.raw_pbs_data
+    except (ValueError, TypeError):
+        return None
+    et = raw.get('eligible_time')
+    if et:
+        return float(_parse_eligible_time(et))
+    return None
 
 
 def _detect_system_name(db: Session) -> str:
@@ -282,6 +315,9 @@ def create_app(config=None) -> FastAPI:
                     su = su.replace(tzinfo=timezone.utc)
                 queue_time = int((now - su).total_seconds())
 
+            # Extract score from raw PBS data (eligible_time based)
+            score = _extract_job_score(job)
+
             queued_jobs.append({
                 "job_id": _short_job_id(job.job_id),
                 "full_job_id": job.job_id,
@@ -293,6 +329,7 @@ def create_app(config=None) -> FastAPI:
                 "nodes": job.nodes or 1,
                 "walltime": job.walltime or "",
                 "queue_time_seconds": queue_time,
+                "score": score,
             })
 
         # --- held jobs count ---

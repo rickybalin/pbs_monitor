@@ -37,6 +37,7 @@
                 <div class="stat-item hero">
                     <span class="label">Utilization</span>
                     <span class="value">{{ utilization }}%</span>
+                    <span class="sub-label">{{ busyNodes }} / {{ totalComputeNodes }}</span>
                 </div>
             </div>
             <div class="header-right">
@@ -144,18 +145,20 @@
                     <table v-if="activeTab === 'queued'" class="jobs-table">
                         <thead>
                             <tr>
-                                <th @click="sortJobs('job_id')">ID</th>
-                                <th @click="sortJobs('owner')">Owner</th>
-                                <th @click="sortJobs('project')">Project</th>
-                                <th @click="sortJobs('allocation_type')">Allocation</th>
-                                <th @click="sortJobs('queue')">Queue</th>
-                                <th @click="sortJobs('nodes')">Nodes</th>
-                                <th @click="sortJobs('walltime')">Walltime</th>
-                                <th @click="sortJobs('queue_time_seconds')">Queue Time</th>
+                                <th @click="sortQueuedJobs('score')">Score</th>
+                                <th @click="sortQueuedJobs('job_id')">ID</th>
+                                <th @click="sortQueuedJobs('owner')">Owner</th>
+                                <th @click="sortQueuedJobs('project')">Project</th>
+                                <th @click="sortQueuedJobs('allocation_type')">Allocation</th>
+                                <th @click="sortQueuedJobs('queue')">Queue</th>
+                                <th @click="sortQueuedJobs('nodes')">Nodes</th>
+                                <th @click="sortQueuedJobs('walltime')">Walltime</th>
+                                <th @click="sortQueuedJobs('queue_time_seconds')">Queue Time</th>
                             </tr>
                         </thead>
                         <tbody>
                             <tr v-for="job in sortedQueuedJobs" :key="job.job_id">
+                                <td class="score-cell">{{ fmtScore(job.score) }}</td>
                                 <td>{{ job.job_id }}</td>
                                 <td>{{ job.owner }}</td>
                                 <td>{{ job.project }}</td>
@@ -166,7 +169,7 @@
                                 <td>{{ fmtDuration(job.queue_time_seconds) }}</td>
                             </tr>
                             <tr v-if="sortedQueuedJobs.length === 0">
-                                <td colspan="8" class="empty-row">No queued jobs</td>
+                                <td colspan="9" class="empty-row">No queued jobs</td>
                             </tr>
                         </tbody>
                     </table>
@@ -189,9 +192,9 @@
                     <div v-for="q in sortedQueues" :key="q.name" class="queue-bar-row">
                         <span class="queue-name">{{ q.name }}</span>
                         <div class="bar-container">
-                            <div class="bar-segment running" :style="{ width: q.runningPct + '%' }" :title="'Running: ' + q.running"></div>
-                            <div class="bar-segment queued"  :style="{ width: q.queuedPct  + '%' }" :title="'Queued: '  + q.queued"></div>
-                            <div class="bar-segment held"    :style="{ width: q.heldPct    + '%' }" :title="'Held: '    + q.held"></div>
+                            <div class="bar-segment running" :style="{ width: q.runningPctScaled + '%' }" :title="'Running: ' + q.running"></div>
+                            <div class="bar-segment queued"  :style="{ width: q.queuedPctScaled  + '%' }" :title="'Queued: '  + q.queued"></div>
+                            <div class="bar-segment held"    :style="{ width: q.heldPctScaled    + '%' }" :title="'Held: '    + q.held"></div>
                         </div>
                         <span class="queue-counts">
                             <span class="c-run">{{ q.running }}</span> /

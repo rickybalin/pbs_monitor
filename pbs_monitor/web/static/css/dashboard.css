@@ -205,8 +205,9 @@ canvas {
 
 /* Jobs Table */
 .table-wrapper {
-    overflow-x: auto;
+    overflow: auto;
     flex: 1;
+    max-height: 60vh;
 }
 
 .jobs-table {
@@ -223,10 +224,19 @@ canvas {
     font-weight: 600;
     cursor: pointer;
     user-select: none;
+    position: sticky;
+    top: 0;
+    z-index: 1;
 }
 
 .jobs-table th:hover {
     color: var(--text-color);
+}
+
+.score-cell {
+    font-family: monospace;
+    color: var(--accent-busy);
+    font-weight: 600;
 }
 
 /* Tabs */
