@@ -90,7 +90,14 @@ createApp({
         // ── derived ──
 
         const systemName = computed(() => systemInfo.value?.system_name || 'PBS Monitor');
-        const utilization = computed(() => snapshot.value?.system?.utilization_percent ?? 0);
+        const utilization = computed(() => {
+            const counts = snapshot.value?.state_counts || {};
+            const total = totalComputeNodes.value;
+            if (!total) return 0;
+            // Count nodes running jobs (job-exclusive + job-sharing + job-exclusive,resv-exclusive)
+            const busy = (counts['job-exclusive'] || 0) + (counts['job-sharing'] || 0) + (counts['job-exclusive,resv-exclusive'] || 0);
+            return Math.round(busy / total * 100);
+        });
         const totalComputeNodes = computed(() => (systemInfo.value?.node_index || []).length);
         const stateCounts = computed(() => snapshot.value?.state_counts || {});
 
