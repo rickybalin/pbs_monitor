@@ -219,7 +219,7 @@ canvas {
 .jobs-table th {
     text-align: left;
     padding: 0.75rem 1rem;
-    background-color: rgba(0, 0, 0, 0.2);
+    background-color: var(--panel-bg);
     color: var(--text-dim);
     font-weight: 600;
     cursor: pointer;
