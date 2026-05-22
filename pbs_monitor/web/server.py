@@ -69,35 +69,101 @@ def _parse_execution_nodes(exec_node: str | None) -> list[str]:
     return names
 
 
-def _parse_eligible_time(et: str | None) -> int:
-    """Parse PBS eligible_time 'HH:MM:SS' to seconds."""
-    if not et:
+# Default server resource defaults for score calculation
+_SERVER_DEFAULTS = {
+    "base_score": 0,
+    "score_boost": 0,
+    "enable_wfp": 0,
+    "wfp_factor": 100000,
+    "enable_backfill": 0,
+    "backfill_max": 50,
+    "backfill_factor": 84600,
+    "enable_fifo": 1,
+    "fifo_factor": 1800,
+    "total_cpus": 1,
+}
+
+
+def _parse_time_str(ts: str | None) -> int:
+    """Parse PBS time string 'HH:MM:SS' or 'DDDD:HH:MM' to seconds."""
+    if not ts:
         return 0
     try:
-        parts = et.split(':')
-        return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        parts = ts.split(':')
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        elif len(parts) == 2:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60
+        return 0
     except (ValueError, IndexError):
         return 0
 
 
-def _extract_job_score(job) -> float | None:
-    """Compute approximate scheduling score from raw PBS data.
+def _coerce_int(val, default: int = 0) -> int:
+    """Coerce a value to int."""
+    if isinstance(val, (int, float)):
+        return int(val)
+    try:
+        s = str(val)
+        return int(float(s)) if '.' in s else int(s)
+    except (ValueError, TypeError):
+        return default
 
-    PBS uses a configurable job_sort_formula. The most common formula on
-    Polaris is based on eligible_time (seconds the job has been eligible
-    to run). We compute: eligible_time_seconds as the score, which
-    mirrors the dominant scheduler ordering.
+
+def _compute_job_score(raw: dict, formula: str | None = None) -> float | None:
+    """Compute job score from raw PBS data using the job_sort_formula.
+
+    Uses the same approach as pbs_monitor.replay.state_tracker.ScoreCalculator:
+    build a variables dict from Resource_List + eligible_time, then eval the
+    formula.  Falls back to eligible_time in seconds if no formula is set.
     """
+    rl = raw.get("Resource_List", {})
+
+    eligible_seconds = _parse_time_str(raw.get("eligible_time"))
+    walltime_seconds = _parse_time_str(
+        rl.get("walltime", raw.get("walltime", "01:00:00"))
+    )
+
+    if formula is None:
+        # Fallback: eligible_time alone
+        return float(eligible_seconds)
+
+    variables = {
+        "eligible_time": eligible_seconds,
+        "walltime": walltime_seconds,
+        "nodect": _coerce_int(rl.get("nodect", raw.get("nodect", 1)), 1),
+        "base_score": _coerce_int(rl.get("base_score", _SERVER_DEFAULTS["base_score"])),
+        "score_boost": _coerce_int(rl.get("score_boost", _SERVER_DEFAULTS["score_boost"])),
+        "enable_wfp": _coerce_int(rl.get("enable_wfp", _SERVER_DEFAULTS["enable_wfp"])),
+        "wfp_factor": _coerce_int(rl.get("wfp_factor", _SERVER_DEFAULTS["wfp_factor"])),
+        "enable_backfill": _coerce_int(rl.get("enable_backfill", _SERVER_DEFAULTS["enable_backfill"])),
+        "backfill_max": _coerce_int(rl.get("backfill_max", _SERVER_DEFAULTS["backfill_max"])),
+        "backfill_factor": _coerce_int(rl.get("backfill_factor", _SERVER_DEFAULTS["backfill_factor"])),
+        "enable_fifo": _coerce_int(rl.get("enable_fifo", _SERVER_DEFAULTS["enable_fifo"])),
+        "fifo_factor": _coerce_int(rl.get("fifo_factor", _SERVER_DEFAULTS["fifo_factor"])),
+        "project_priority": _coerce_int(rl.get("project_priority", 1), 1),
+        "total_cpus": _coerce_int(rl.get("total_cpus", _SERVER_DEFAULTS["total_cpus"]), 1),
+        "min": min,
+        "max": max,
+    }
+
+    try:
+        score = eval(formula, {"__builtins__": {}}, variables)
+        return float(score)
+    except Exception:
+        # Fallback to eligible_time
+        return float(eligible_seconds) if eligible_seconds else None
+
+
+def _extract_job_score(job, formula: str | None = None) -> float | None:
+    """Extract score for a Job ORM object."""
     if not job.raw_pbs_data:
         return None
     try:
         raw = _json.loads(job.raw_pbs_data) if isinstance(job.raw_pbs_data, str) else job.raw_pbs_data
     except (ValueError, TypeError):
         return None
-    et = raw.get('eligible_time')
-    if et:
-        return float(_parse_eligible_time(et))
-    return None
+    return _compute_job_score(raw, formula)
 
 
 def _detect_system_name(db: Session) -> str:
@@ -149,8 +215,16 @@ def _build_node_index(db: Session) -> tuple[list[str], list[int]]:
 # App factory — called by the CLI `web` command
 # ---------------------------------------------------------------------------
 
-def create_app(config=None) -> FastAPI:
-    """Create and configure the FastAPI application."""
+def create_app(config=None, job_sort_formula: str | None = None) -> FastAPI:
+    """Create and configure the FastAPI application.
+
+    Args:
+        config: Optional Config object (auto-loaded if None).
+        job_sort_formula: PBS job_sort_formula string for score calculation.
+            If provided, scores are computed using this formula; otherwise
+            falls back to eligible_time in seconds.
+    """
+    _job_formula = job_sort_formula
     # Resolve database URL
     if config is None:
         from pbs_monitor.config import Config
@@ -302,6 +376,7 @@ def create_app(config=None) -> FastAPI:
                 "remaining_seconds": remaining,
                 "queue_time_seconds": queue_time or 0,
                 "node_indices": node_indices,
+                "score": _extract_job_score(job, _job_formula),
             })
 
         # --- queued jobs (full detail for table) ---
@@ -315,8 +390,8 @@ def create_app(config=None) -> FastAPI:
                     su = su.replace(tzinfo=timezone.utc)
                 queue_time = int((now - su).total_seconds())
 
-            # Extract score from raw PBS data (eligible_time based)
-            score = _extract_job_score(job)
+            # Extract score from raw PBS data
+            score = _extract_job_score(job, _job_formula)
 
             queued_jobs.append({
                 "job_id": _short_job_id(job.job_id),

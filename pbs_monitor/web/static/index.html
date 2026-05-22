@@ -107,6 +107,7 @@
                     <table v-if="activeTab === 'running'" class="jobs-table">
                         <thead>
                             <tr>
+                                <th @click="sortJobs('score')">Score</th>
                                 <th @click="sortJobs('job_id')">ID</th>
                                 <th @click="sortJobs('owner')">Owner</th>
                                 <th @click="sortJobs('project')">Project</th>
@@ -125,6 +126,7 @@
                                 @mouseleave="clearHighlight"
                                 @click="selectJob(job.job_id)"
                                 :class="{ 'job-row-highlight': selectedJobId === job.job_id }">
+                                <td class="score-cell">{{ fmtScore(job.score) }}</td>
                                 <td>{{ job.job_id }}</td>
                                 <td>{{ job.owner }}</td>
                                 <td>{{ job.project }}</td>
@@ -136,7 +138,7 @@
                                 <td>{{ fmtDuration(job.queue_time_seconds) }}</td>
                             </tr>
                             <tr v-if="sortedRunningJobs.length === 0">
-                                <td colspan="9" class="empty-row">No running jobs</td>
+                                <td colspan="10" class="empty-row">No running jobs</td>
                             </tr>
                         </tbody>
                     </table>
