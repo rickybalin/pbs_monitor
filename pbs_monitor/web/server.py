@@ -100,9 +100,10 @@ def _build_topology(db: Session) -> dict:
 
 
 def _build_node_index(db: Session) -> list[str]:
-    """Ordered list of all node names by snapshot_index."""
+    """Ordered list of all node names by snapshot_index (compute nodes only)."""
     rows = (
         db.query(Node.name)
+        .filter(Node.name.like('x%'))
         .order_by(Node.snapshot_index)
         .all()
     )
@@ -204,10 +205,12 @@ def create_app(config=None) -> FastAPI:
             label = STATE_CHAR_LABELS.get(ch, "unknown")
             state_counts[label] = state_counts.get(label, 0) + 1
 
-        # --- node name → snapshot_index lookup ---
+        # --- node name → snapshot_index lookup (compute nodes only) ---
         node_map: dict[str, int] = {
             n.name: n.snapshot_index
-            for n in db.query(Node.name, Node.snapshot_index).all()
+            for n in db.query(Node.name, Node.snapshot_index)
+            .filter(Node.name.like('x%'))
+            .all()
         }
 
         # --- running jobs ---
