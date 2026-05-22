@@ -16,16 +16,17 @@ A lightweight web dashboard that provides a live view of the PBS system state �
 ### Deployment Model
 
 ```
-[Polaris login node]                    [Laptop]
-  pbs-monitor daemon → SQLite DB ←─ FastAPI server ──── SSH tunnel ──── Browser
-                                        :8080                           localhost:8080
+[Login Node (e.g. polaris-login-01)]              [Laptop]
+  daemon → SQLite DB ← FastAPI :8080 ←── SSH tunnel ──── Browser
+         (all on login node)                              localhost:8080
 ```
 
-- The existing daemon collects data every ~5 minutes into SQLite
-- The web server reads from that same SQLite DB (read-only)
-- User starts server manually: `pbs-monitor web --port 8080`
-- User tunnels: `ssh -L 8080:localhost:8080 <login-node>`
-- No auth needed (single-user, localhost-only binding)
+- Everything runs on the login node: daemon, SQLite DB, and FastAPI server
+- The laptop only provides the SSH tunnel and the browser — no server-side processes
+- User starts server manually on the login node: `pbs-monitor web --port 8080`
+- User tunnels from laptop: `ssh -L 8080:localhost:8080 <login-node>`
+- Opens `localhost:8080` in laptop browser
+- No auth needed (single-user, localhost-only binding on login node)
 
 ### Tech Stack
 
