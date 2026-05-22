@@ -215,33 +215,6 @@ def _build_node_index(db: Session) -> tuple[list[str], list[int]]:
 # App factory — called by the CLI `web` command
 # ---------------------------------------------------------------------------
 
-def _load_pbs_score_config() -> tuple[str | None, dict[str, Any]]:
-    """Attempt to load the job sort formula and server defaults from PBS.
-
-    Returns (formula, server_defaults).  Both may be None/empty if PBS
-    commands are unavailable (e.g. running on a non-login-node machine).
-    """
-    import logging
-    log = logging.getLogger(__name__)
-    try:
-        from pbs_monitor.pbs_commands import PBSCommands
-        pbs = PBSCommands(timeout=10)
-        server_data = pbs.qstat_server()
-        formula = pbs.get_job_sort_formula(server_data=server_data)
-        # Extract server resource defaults
-        server_defaults: dict[str, Any] = {}
-        server_info = server_data.get("Server", {})
-        for _name, details in server_info.items():
-            server_defaults = details.get("resources_default", {})
-            break
-        if formula:
-            log.info(f"Loaded PBS job sort formula: {formula}")
-        return formula, server_defaults
-    except Exception as e:
-        log.info(f"PBS commands unavailable, scores will use eligible_time fallback: {e}")
-        return None, {}
-
-
 def create_app(config=None) -> FastAPI:
     """Create and configure the FastAPI application."""
     # Resolve database URL
@@ -253,14 +226,6 @@ def create_app(config=None) -> FastAPI:
     connect_args: dict[str, Any] = {}
     if db_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
-
-    # Load PBS score formula and server defaults at startup
-    _job_formula, _pbs_server_defaults = _load_pbs_score_config()
-    if _pbs_server_defaults:
-        _SERVER_DEFAULTS.update({
-            k: _coerce_int(v) for k, v in _pbs_server_defaults.items()
-            if k in _SERVER_DEFAULTS
-        })
 
     engine = create_engine(db_url, connect_args=connect_args)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -281,6 +246,45 @@ def create_app(config=None) -> FastAPI:
             yield db
         finally:
             db.close()
+
+    # ---- cached PBS score config (loaded lazily on first request) ----
+    _score_config: dict[str, Any] = {}  # {"formula": str|None, "loaded": bool}
+
+    def _get_job_formula() -> str | None:
+        """Lazy-load the PBS job sort formula and server defaults.
+
+        Called on the first API request, not at Uvicorn startup.
+        Result is cached for the lifetime of the process.
+        """
+        if _score_config.get("loaded"):
+            return _score_config.get("formula")
+
+        _score_config["loaded"] = True
+        import logging
+        log = logging.getLogger(__name__)
+        try:
+            from pbs_monitor.pbs_commands import PBSCommands
+            pbs = PBSCommands(timeout=10)
+            server_data = pbs.qstat_server()
+            formula = pbs.get_job_sort_formula(server_data=server_data)
+            # Update server defaults from live PBS data
+            server_info = server_data.get("Server", {})
+            for _name, details in server_info.items():
+                pbs_defaults = details.get("resources_default", {})
+                if pbs_defaults:
+                    _SERVER_DEFAULTS.update({
+                        k: _coerce_int(v) for k, v in pbs_defaults.items()
+                        if k in _SERVER_DEFAULTS
+                    })
+                break
+            if formula:
+                log.info(f"Loaded PBS job sort formula: {formula}")
+            _score_config["formula"] = formula
+            return formula
+        except Exception as e:
+            log.info(f"PBS commands unavailable, scores will use eligible_time fallback: {e}")
+            _score_config["formula"] = None
+            return None
 
     # ---- cached system info ----
     _system_cache: dict[str, Any] = {}
@@ -308,7 +312,7 @@ def create_app(config=None) -> FastAPI:
             "node_index": node_names,
             "snapshot_indices": snapshot_indices,
             "last_collection": last_log[0].isoformat() if last_log else None,
-            "job_sort_formula": _job_formula,
+            "job_sort_formula": _get_job_formula(),
         }
         _system_cache.update(info)
         return info
@@ -404,7 +408,7 @@ def create_app(config=None) -> FastAPI:
                 "remaining_seconds": remaining,
                 "queue_time_seconds": queue_time or 0,
                 "node_indices": node_indices,
-                "score": _extract_job_score(job, _job_formula),
+                "score": _extract_job_score(job, _get_job_formula()),
             })
 
         # --- queued jobs (full detail for table) ---
@@ -419,7 +423,7 @@ def create_app(config=None) -> FastAPI:
                 queue_time = int((now - su).total_seconds())
 
             # Extract score from raw PBS data
-            score = _extract_job_score(job, _job_formula)
+            score = _extract_job_score(job, _get_job_formula())
 
             queued_jobs.append({
                 "job_id": _short_job_id(job.job_id),
