@@ -1,35 +1,23 @@
 /**
  * PBS Monitor Dashboard — Vue 3 frontend
- *
- * Renders a live node map (Canvas), running jobs table,
- * queue status bars, and system utilization header.
- *
- * API contract (all GET):
- *   /api/system   → {system_name, total_nodes, topology, node_index, last_collection}
- *   /api/snapshot  → {timestamp, system, state_string, state_counts, jobs:{running:[]}, queues:[]}
  */
 
 // ── constants ────────────────────────────────────────────────────────────────
 
 const STATE_COLORS = {
-    A: '#4ade80', // free — green
-    B: '#6b7280', // offline — gray
-    C: '#ef4444', // down — red
-    D: '#f59e0b', // busy — amber
-    E: '#3b82f6', // job-exclusive — blue
-    F: '#06b6d4', // job-sharing — cyan
-    G: '#8b5cf6', // reserve — violet
-    H: '#a855f7', // resv-exclusive — purple
-    I: '#4b5563', // down,offline — dark gray
-    J: '#7f1d1d', // state-unknown,down — dark red
-    K: '#581c87', // state-unknown,down,offline — dark purple
-    L: '#2563eb', // job-exclusive,resv-exclusive — darker blue
-    M: '#4c1d95', // offline,resv-exclusive — dark violet
-    N: '#374151', // unknown — slate
+    A: '#4ade80', B: '#6b7280', C: '#ef4444', D: '#f59e0b',
+    E: '#3b82f6', F: '#06b6d4', G: '#8b5cf6', H: '#a855f7',
+    I: '#4b5563', J: '#7f1d1d', K: '#581c87', L: '#2563eb',
+    M: '#4c1d95', N: '#374151',
+};
+const STATE_CHAR_LABELS = {
+    A:'free', B:'offline', C:'down', D:'busy', E:'job-exclusive',
+    F:'job-sharing', G:'reserve', H:'resv-exclusive', I:'down,offline',
+    J:'state-unknown,down', K:'state-unknown,down,offline',
+    L:'job-exclusive,resv-exclusive', M:'offline,resv-exclusive', N:'unknown',
 };
 const FALLBACK_COLOR = '#1f2937';
 
-// 24 distinct job colours so neighbouring jobs don't collide visually
 const JOB_PALETTE = [
     '#3b82f6','#2563eb','#1d4ed8','#1e40af','#1e3a8a',
     '#60a5fa','#0ea5e9','#0284c7','#0369a1','#075985',
@@ -47,20 +35,11 @@ const QUEUE_COLORS = [
 
 function hashStr(s) {
     let h = 0;
-    for (let i = 0; i < s.length; i++) {
-        h = ((h << 5) - h) + s.charCodeAt(i);
-        h |= 0;
-    }
+    for (let i = 0; i < s.length; i++) { h = ((h << 5) - h) + s.charCodeAt(i); h |= 0; }
     return Math.abs(h);
 }
-
-function jobColor(jobId) {
-    return JOB_PALETTE[hashStr(String(jobId)) % JOB_PALETTE.length];
-}
-
-function queueColor(name) {
-    return QUEUE_COLORS[hashStr(String(name)) % QUEUE_COLORS.length];
-}
+function jobColor(id) { return JOB_PALETTE[hashStr(String(id)) % JOB_PALETTE.length]; }
+function queueColor(name) { return QUEUE_COLORS[hashStr(String(name)) % QUEUE_COLORS.length]; }
 
 function fmtDuration(totalSec) {
     if (totalSec == null) return '--';
@@ -76,6 +55,7 @@ function fmtDuration(totalSec) {
 function timeSince(isoStr) {
     if (!isoStr) return '';
     const diff = Math.floor((Date.now() - new Date(isoStr).getTime()) / 1000);
+    if (diff < 0) return 'just now';
     if (diff < 60) return `${diff}s ago`;
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
     return `${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}m ago`;
@@ -87,41 +67,37 @@ const { createApp, ref, reactive, computed, onMounted, onUnmounted, watch, nextT
 
 createApp({
     setup() {
-        // ---- state ----
-        const systemInfo = ref(null);
-        const snapshot   = ref(null);
-        const loading    = ref(true);
-        const error      = ref(null);
-        const lastFetch  = ref(null);          // Date when we last got data
+        const systemInfo   = ref(null);
+        const snapshot     = ref(null);
+        const loading      = ref(true);
+        const error        = ref(null);
 
-        const sortKey    = ref('nodes');
-        const sortDesc   = ref(true);
+        const activeTab    = ref('running');
+        const sortKey      = ref('nodes');
+        const sortDesc     = ref(true);
         const selectedJobId = ref(null);
         const hoveredJobId  = ref(null);
 
-        const nodeCanvas   = ref(null);        // template ref
-        const mapContainer = ref(null);        // template ref
+        const nodeCanvas   = ref(null);
+        const mapContainer = ref(null);
         const tooltip = reactive({ visible: false, x: 0, y: 0, nodeName: '', state: '', jobId: '', owner: '', project: '', queue: '' });
 
-        // Precomputed layout (survives across redraws until resize / new data)
-        let layout = [];        // [{x, y, idx}]
+        let layout = [];
         let cellSize = 10;
-        let mapCols = 0;
-        let mapRows = 0;
+        let nodeToJobMap = new Map();
+        let jobToIndices = new Map();
 
-        // Index look-ups rebuilt when snapshot arrives
-        let nodeToJobMap = new Map();   // snapshot_index → job short_id
-        let jobToIndices = new Map();   // job short_id → Set<snapshot_index>
+        // ── derived ──
 
-        // ---- derived ----
         const systemName = computed(() => systemInfo.value?.system_name || 'PBS Monitor');
         const utilization = computed(() => snapshot.value?.system?.utilization_percent ?? 0);
-        const jobs = computed(() => {
+
+        const jobCounts = computed(() => {
             const s = snapshot.value;
             if (!s) return { running: 0, queued: 0, held: 0 };
             return {
                 running: s.jobs?.running?.length ?? s.system?.running_jobs ?? 0,
-                queued:  s.system?.queued_jobs ?? 0,
+                queued:  s.jobs?.queued?.length ?? s.system?.queued_jobs ?? 0,
                 held:    s.system?.held_jobs ?? 0,
             };
         });
@@ -135,10 +111,9 @@ createApp({
         });
         const timeSinceLastUpdate = computed(() => timeSince(snapshot.value?.timestamp));
 
-        const sortedJobs = computed(() => {
-            const list = [...(snapshot.value?.jobs?.running || [])];
+        function sortedList(list) {
             const key = sortKey.value;
-            return list.sort((a, b) => {
+            return [...list].sort((a, b) => {
                 let va = a[key] ?? '';
                 let vb = b[key] ?? '';
                 if (typeof va === 'string') va = va.toLowerCase();
@@ -147,7 +122,10 @@ createApp({
                 if (va > vb) return sortDesc.value ? -1 : 1;
                 return 0;
             });
-        });
+        }
+
+        const sortedRunningJobs = computed(() => sortedList(snapshot.value?.jobs?.running || []));
+        const sortedQueuedJobs  = computed(() => sortedList(snapshot.value?.jobs?.queued  || []));
 
         const sortedQueues = computed(() =>
             [...(snapshot.value?.queues || [])]
@@ -155,7 +133,8 @@ createApp({
                 .sort((a, b) => b.total - a.total)
         );
 
-        // ---- data fetching ----
+        // ── data fetching ──
+
         async function fetchSystem() {
             const res = await fetch('/api/system');
             if (!res.ok) throw new Error(`System API ${res.status}`);
@@ -166,7 +145,6 @@ createApp({
             const res = await fetch('/api/snapshot');
             if (!res.ok) throw new Error(`Snapshot API ${res.status}`);
             snapshot.value = await res.json();
-            lastFetch.value = new Date();
             rebuildIndexes();
         }
 
@@ -179,24 +157,22 @@ createApp({
             } catch (e) {
                 console.error(e);
                 error.value = e.message;
-                if (!snapshot.value) loading.value = false; // show error overlay
+                if (!snapshot.value) loading.value = false;
             }
         }
 
         function rebuildIndexes() {
             nodeToJobMap = new Map();
             jobToIndices = new Map();
-            const running = snapshot.value?.jobs?.running || [];
-            for (const job of running) {
+            for (const job of (snapshot.value?.jobs?.running || [])) {
                 const indices = job.node_indices || [];
                 jobToIndices.set(job.job_id, new Set(indices));
-                for (const idx of indices) {
-                    nodeToJobMap.set(idx, job.job_id);
-                }
+                for (const idx of indices) nodeToJobMap.set(idx, job.job_id);
             }
         }
 
-        // ---- canvas layout ----
+        // ── canvas layout ──
+
         function computeLayout() {
             const canvas = nodeCanvas.value;
             const container = mapContainer.value;
@@ -205,54 +181,48 @@ createApp({
             const totalNodes = (systemInfo.value.node_index || []).length;
             if (totalNodes === 0) return;
 
-            const containerW = container.clientWidth - 32;   // 16px padding each side
+            const containerW = container.clientWidth - 24; // padding
             const topo = systemInfo.value.topology;
             const rackNames = topo?.rack_names || [];
             const nodesPerRack = topo?.nodes_per_rack || [];
 
             if (rackNames.length > 0) {
-                // Rack-aware layout: racks as columns, nodes within each rack as rows
                 const nRacks = rackNames.length;
-                const maxNodesInRack = Math.max(...nodesPerRack);
-
-                // How many racks per row?  Try to keep aspect ratio reasonable.
-                const racksPerRow = Math.min(nRacks, Math.max(10, Math.floor(containerW / 60)));
-                const rackRows = Math.ceil(nRacks / racksPerRow);
+                const maxInRack = Math.max(...nodesPerRack);
                 const gap = 2;
 
-                // Cell size: fit racksPerRow racks, each maxNodesInRack cells tall
-                const availW = containerW - (racksPerRow - 1) * gap;
-                cellSize = Math.max(3, Math.min(12, Math.floor(availW / racksPerRow)));
+                // Try fitting all racks in one row first, then wrap
+                const racksPerRow = Math.min(nRacks, Math.max(10, Math.floor(containerW / 20)));
+                const rackRows = Math.ceil(nRacks / racksPerRow);
+
+                // Each rack is 1 cell wide, maxInRack cells tall
+                cellSize = Math.max(3, Math.min(14, Math.floor((containerW - (racksPerRow - 1) * gap) / racksPerRow)));
 
                 layout = [];
-                let globalIdx = 0;  // running index into snapshot_data
+                let globalIdx = 0;
 
                 for (let ri = 0; ri < nRacks; ri++) {
                     const col = ri % racksPerRow;
                     const row = Math.floor(ri / racksPerRow);
                     const xOff = col * (cellSize + gap);
-                    const yOff = row * (maxNodesInRack * (cellSize + 1) + gap * 4);
+                    const yOff = row * (maxInRack * (cellSize + 1) + gap * 6);
 
-                    const count = nodesPerRack[ri];
-                    for (let ni = 0; ni < count; ni++) {
+                    for (let ni = 0; ni < nodesPerRack[ri]; ni++) {
                         layout.push({ x: xOff, y: yOff + ni * (cellSize + 1), idx: globalIdx });
                         globalIdx++;
                     }
                 }
 
-                // Canvas dimensions
                 const maxX = Math.max(...layout.map(l => l.x)) + cellSize;
                 const maxY = Math.max(...layout.map(l => l.y)) + cellSize;
                 canvas.width = maxX;
                 canvas.height = maxY;
-                mapCols = racksPerRow;
-                mapRows = 0; // not used in rack mode
+                canvas.style.width = maxX + 'px';
+                canvas.style.height = maxY + 'px';
             } else {
-                // Flat grid fallback
                 const cols = Math.ceil(Math.sqrt(totalNodes * 1.5));
                 cellSize = Math.max(3, Math.min(12, Math.floor(containerW / cols)));
                 const rows = Math.ceil(totalNodes / cols);
-
                 layout = [];
                 for (let i = 0; i < totalNodes; i++) {
                     layout.push({
@@ -261,14 +231,17 @@ createApp({
                         idx: i,
                     });
                 }
-                canvas.width = cols * (cellSize + 1);
-                canvas.height = rows * (cellSize + 1);
-                mapCols = cols;
-                mapRows = rows;
+                const w = cols * (cellSize + 1);
+                const h = rows * (cellSize + 1);
+                canvas.width = w;
+                canvas.height = h;
+                canvas.style.width = w + 'px';
+                canvas.style.height = h + 'px';
             }
         }
 
-        // ---- canvas draw ----
+        // ── canvas draw ──
+
         function drawMap() {
             const canvas = nodeCanvas.value;
             if (!canvas || layout.length === 0) return;
@@ -287,7 +260,6 @@ createApp({
                 const ch = stateStr[cell.idx] || '0';
                 let color = STATE_COLORS[ch] || FALLBACK_COLOR;
 
-                // Per-job colouring for occupied nodes
                 if ('EFL'.includes(ch)) {
                     const jid = nodeToJobMap.get(cell.idx);
                     if (jid) color = jobColor(jid);
@@ -296,7 +268,6 @@ createApp({
                 ctx.fillStyle = color;
                 ctx.fillRect(cell.x, cell.y, cellSize, cellSize);
 
-                // Highlight border
                 if (highlightSet && highlightSet.has(cell.idx)) {
                     ctx.strokeStyle = '#ffffff';
                     ctx.lineWidth = 1.5;
@@ -305,7 +276,8 @@ createApp({
             }
         }
 
-        // ---- canvas interaction ----
+        // ── canvas interaction ──
+
         function cellAtMouse(e) {
             const canvas = nodeCanvas.value;
             if (!canvas) return null;
@@ -314,13 +286,9 @@ createApp({
             const scaleY = canvas.height / rect.height;
             const mx = (e.clientX - rect.left) * scaleX;
             const my = (e.clientY - rect.top) * scaleY;
-
-            // Linear scan is fine for ≤10K cells
             for (const cell of layout) {
                 if (mx >= cell.x && mx < cell.x + cellSize &&
-                    my >= cell.y && my < cell.y + cellSize) {
-                    return cell;
-                }
+                    my >= cell.y && my < cell.y + cellSize) return cell;
             }
             return null;
         }
@@ -331,15 +299,11 @@ createApp({
 
             const nodeIndex = systemInfo.value?.node_index || [];
             const stateStr  = snapshot.value?.state_string || '';
-            const name = nodeIndex[cell.idx] || `node-${cell.idx}`;
-            const ch   = stateStr[cell.idx] || '?';
+            const ch = stateStr[cell.idx] || '?';
 
-            tooltip.nodeName = name;
+            tooltip.nodeName = nodeIndex[cell.idx] || `node-${cell.idx}`;
             tooltip.state    = STATE_CHAR_LABELS[ch] || ch;
-            tooltip.jobId    = '';
-            tooltip.owner    = '';
-            tooltip.project  = '';
-            tooltip.queue    = '';
+            tooltip.jobId = ''; tooltip.owner = ''; tooltip.project = ''; tooltip.queue = '';
 
             const jid = nodeToJobMap.get(cell.idx);
             if (jid) {
@@ -352,7 +316,6 @@ createApp({
                 }
             }
 
-            // Position tooltip near mouse, keep on-screen
             const container = mapContainer.value;
             const rect = container.getBoundingClientRect();
             tooltip.x = e.clientX - rect.left + 12;
@@ -368,8 +331,8 @@ createApp({
             const jid = nodeToJobMap.get(cell.idx);
             if (jid) {
                 selectedJobId.value = (selectedJobId.value === jid) ? null : jid;
+                activeTab.value = 'running';
                 requestAnimationFrame(drawMap);
-                // Scroll table row into view
                 nextTick(() => {
                     const row = document.getElementById(`job-row-${jid}`);
                     if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -377,37 +340,27 @@ createApp({
             }
         }
 
-        // ---- jobs table ----
+        // ── jobs table ──
+
         function sortJobs(key) {
             if (sortKey.value === key) sortDesc.value = !sortDesc.value;
             else { sortKey.value = key; sortDesc.value = true; }
         }
-
         function highlightJob(jid) { hoveredJobId.value = jid; requestAnimationFrame(drawMap); }
         function clearHighlight()   { hoveredJobId.value = null; requestAnimationFrame(drawMap); }
         function selectJob(jid)     { selectedJobId.value = (selectedJobId.value === jid) ? null : jid; requestAnimationFrame(drawMap); }
         function isOverdue(job)     { return job.remaining_seconds <= 0 && job.elapsed_seconds > 0; }
 
-        // ---- tooltipStyle ----
-        const tooltipStyle = computed(() => ({
-            left: tooltip.x + 'px',
-            top:  tooltip.y + 'px',
-        }));
+        const tooltipStyle = computed(() => ({ left: tooltip.x + 'px', top: tooltip.y + 'px' }));
 
-        // ---- lifecycle ----
+        // ── lifecycle ──
+
         let pollTimer = null;
 
-        function onResize() {
-            computeLayout();
-            requestAnimationFrame(drawMap);
-        }
+        function onResize() { computeLayout(); requestAnimationFrame(drawMap); }
 
-        // Watch for new data → recompute + redraw
         watch(snapshot, () => {
-            nextTick(() => {
-                computeLayout();
-                requestAnimationFrame(drawMap);
-            });
+            nextTick(() => { computeLayout(); requestAnimationFrame(drawMap); });
         });
 
         onMounted(async () => {
@@ -422,14 +375,11 @@ createApp({
         });
 
         return {
-            // state
-            systemInfo, snapshot, loading, error, lastFetch,
-            sortKey, sortDesc, selectedJobId, hoveredJobId,
+            systemInfo, snapshot, loading, error,
+            activeTab, sortKey, sortDesc, selectedJobId, hoveredJobId,
             nodeCanvas, mapContainer, tooltip, tooltipStyle,
-            // computed
-            systemName, utilization, jobs, freshnessClass, timeSinceLastUpdate,
-            sortedJobs, sortedQueues,
-            // methods
+            systemName, utilization, jobCounts, freshnessClass, timeSinceLastUpdate,
+            sortedRunningJobs, sortedQueuedJobs, sortedQueues,
             fetchData, sortJobs, selectJob, highlightJob, clearHighlight, isOverdue,
             onCanvasMove, onCanvasLeave, onCanvasClick,
             fmtDuration, queueColor,

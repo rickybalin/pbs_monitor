@@ -42,15 +42,15 @@
             <div class="header-right">
                 <div class="stat-item">
                     <span class="label">Running</span>
-                    <span class="value count-running">{{ jobs.running }}</span>
+                    <span class="value count-running">{{ jobCounts.running }}</span>
                 </div>
                 <div class="stat-item">
                     <span class="label">Queued</span>
-                    <span class="value count-queued">{{ jobs.queued }}</span>
+                    <span class="value count-queued">{{ jobCounts.queued }}</span>
                 </div>
                 <div class="stat-item">
                     <span class="label">Held</span>
-                    <span class="value count-held">{{ jobs.held }}</span>
+                    <span class="value count-held">{{ jobCounts.held }}</span>
                 </div>
             </div>
         </header>
@@ -87,45 +87,86 @@
                 </div>
             </section>
 
-            <!-- Running Jobs Table -->
+            <!-- Jobs Panel (tabbed) -->
             <section class="panel jobs-panel">
                 <div class="panel-header">
-                    <h2>Running Jobs ({{ jobs.running }})</h2>
+                    <div class="tab-bar">
+                        <button class="tab-btn" :class="{ active: activeTab === 'running' }"
+                                @click="activeTab = 'running'">
+                            Running ({{ jobCounts.running }})
+                        </button>
+                        <button class="tab-btn" :class="{ active: activeTab === 'queued' }"
+                                @click="activeTab = 'queued'">
+                            Queued ({{ jobCounts.queued }})
+                        </button>
+                    </div>
                 </div>
                 <div class="table-wrapper">
-                    <table class="jobs-table">
+                    <!-- Running Jobs Table -->
+                    <table v-if="activeTab === 'running'" class="jobs-table">
                         <thead>
                             <tr>
                                 <th @click="sortJobs('job_id')">ID</th>
-                                <th @click="sortJobs('name')">Name</th>
                                 <th @click="sortJobs('owner')">Owner</th>
                                 <th @click="sortJobs('project')">Project</th>
+                                <th @click="sortJobs('allocation_type')">Allocation</th>
                                 <th @click="sortJobs('queue')">Queue</th>
                                 <th @click="sortJobs('nodes')">Nodes</th>
-                                <th @click="sortJobs('elapsed_seconds')">Elapsed</th>
-                                <th @click="sortJobs('remaining_seconds')">Remaining</th>
+                                <th @click="sortJobs('walltime')">Walltime</th>
+                                <th @click="sortJobs('elapsed_seconds')">Run Time</th>
+                                <th @click="sortJobs('queue_time_seconds')">Queue Time</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="job in sortedJobs" :key="job.job_id"
+                            <tr v-for="job in sortedRunningJobs" :key="job.job_id"
                                 :id="'job-row-' + job.job_id"
                                 @mouseenter="highlightJob(job.job_id)"
                                 @mouseleave="clearHighlight"
                                 @click="selectJob(job.job_id)"
                                 :class="{ 'job-row-highlight': selectedJobId === job.job_id }">
                                 <td>{{ job.job_id }}</td>
-                                <td class="job-name">{{ job.name }}</td>
                                 <td>{{ job.owner }}</td>
                                 <td>{{ job.project }}</td>
+                                <td>{{ job.allocation_type }}</td>
                                 <td><span class="queue-badge" :style="{ backgroundColor: queueColor(job.queue) }">{{ job.queue }}</span></td>
                                 <td>{{ job.nodes }}</td>
+                                <td>{{ job.walltime }}</td>
                                 <td>{{ fmtDuration(job.elapsed_seconds) }}</td>
-                                <td :class="{ 'text-danger': isOverdue(job) }">
-                                    {{ isOverdue(job) ? 'overdue' : fmtDuration(job.remaining_seconds) }}
-                                </td>
+                                <td>{{ fmtDuration(job.queue_time_seconds) }}</td>
                             </tr>
-                            <tr v-if="sortedJobs.length === 0">
-                                <td colspan="8" class="empty-row">No running jobs</td>
+                            <tr v-if="sortedRunningJobs.length === 0">
+                                <td colspan="9" class="empty-row">No running jobs</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <!-- Queued Jobs Table -->
+                    <table v-if="activeTab === 'queued'" class="jobs-table">
+                        <thead>
+                            <tr>
+                                <th @click="sortJobs('job_id')">ID</th>
+                                <th @click="sortJobs('owner')">Owner</th>
+                                <th @click="sortJobs('project')">Project</th>
+                                <th @click="sortJobs('allocation_type')">Allocation</th>
+                                <th @click="sortJobs('queue')">Queue</th>
+                                <th @click="sortJobs('nodes')">Nodes</th>
+                                <th @click="sortJobs('walltime')">Walltime</th>
+                                <th @click="sortJobs('queue_time_seconds')">Queue Time</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="job in sortedQueuedJobs" :key="job.job_id">
+                                <td>{{ job.job_id }}</td>
+                                <td>{{ job.owner }}</td>
+                                <td>{{ job.project }}</td>
+                                <td>{{ job.allocation_type }}</td>
+                                <td><span class="queue-badge" :style="{ backgroundColor: queueColor(job.queue) }">{{ job.queue }}</span></td>
+                                <td>{{ job.nodes }}</td>
+                                <td>{{ job.walltime }}</td>
+                                <td>{{ fmtDuration(job.queue_time_seconds) }}</td>
+                            </tr>
+                            <tr v-if="sortedQueuedJobs.length === 0">
+                                <td colspan="8" class="empty-row">No queued jobs</td>
                             </tr>
                         </tbody>
                     </table>

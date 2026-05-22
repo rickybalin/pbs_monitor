@@ -178,6 +178,11 @@ def create_app(config=None) -> FastAPI:
     def api_snapshot(db: Session = Depends(get_db)):
         now = datetime.now(timezone.utc)
 
+        # --- freshest data timestamp ---
+        latest_collection = (
+            db.query(func.max(DataCollectionLog.timestamp)).scalar()
+        )
+
         # --- system aggregate ---
         sys_snap = (
             db.query(SystemSnapshot)
@@ -223,27 +228,64 @@ def create_app(config=None) -> FastAPI:
             exec_names = _parse_execution_nodes(job.execution_node)
             node_indices = [node_map[n] for n in exec_names if n in node_map]
 
+            queue_time = job.queue_time_seconds
+            if queue_time is None and job.start_time and job.submit_time:
+                st = job.start_time
+                su = job.submit_time
+                if st.tzinfo is None:
+                    st = st.replace(tzinfo=timezone.utc)
+                if su.tzinfo is None:
+                    su = su.replace(tzinfo=timezone.utc)
+                queue_time = int((st - su).total_seconds())
+
             running_jobs.append({
                 "job_id": _short_job_id(job.job_id),
                 "full_job_id": job.job_id,
                 "name": job.job_name or "",
                 "owner": job.owner or "",
                 "project": job.project or "",
+                "allocation_type": job.allocation_type or "",
                 "queue": job.queue or "",
                 "nodes": job.nodes or len(exec_names) or 1,
                 "walltime": job.walltime or "",
                 "elapsed_seconds": elapsed,
                 "remaining_seconds": remaining,
+                "queue_time_seconds": queue_time or 0,
                 "node_indices": node_indices,
             })
 
-        # --- queued / held counts per queue ---
-        queued_by_q = dict(
-            db.query(Job.queue, func.count(Job.job_id))
-            .filter(Job.state == JobState.QUEUED)
-            .group_by(Job.queue)
-            .all()
-        )
+        # --- queued jobs (full detail for table) ---
+        queued_rows = db.query(Job).filter(Job.state == JobState.QUEUED).all()
+        queued_jobs = []
+        for job in queued_rows:
+            queue_time = 0
+            if job.submit_time:
+                su = job.submit_time
+                if su.tzinfo is None:
+                    su = su.replace(tzinfo=timezone.utc)
+                queue_time = int((now - su).total_seconds())
+
+            queued_jobs.append({
+                "job_id": _short_job_id(job.job_id),
+                "full_job_id": job.job_id,
+                "name": job.job_name or "",
+                "owner": job.owner or "",
+                "project": job.project or "",
+                "allocation_type": job.allocation_type or "",
+                "queue": job.queue or "",
+                "nodes": job.nodes or 1,
+                "walltime": job.walltime or "",
+                "queue_time_seconds": queue_time,
+            })
+
+        # --- held jobs count ---
+        held_count = db.query(func.count(Job.job_id)).filter(Job.state == JobState.HELD).scalar() or 0
+
+        # --- queue counts for queue status bars ---
+        queued_by_q: dict[str, int] = {}
+        for j in queued_jobs:
+            q = j["queue"]
+            queued_by_q[q] = queued_by_q.get(q, 0) + 1
         held_by_q = dict(
             db.query(Job.queue, func.count(Job.job_id))
             .filter(Job.state == JobState.HELD)
@@ -282,11 +324,14 @@ def create_app(config=None) -> FastAPI:
                 "heldPct": round(h / total * 100, 1),
             })
 
+        # Use the freshest timestamp available
+        best_ts = latest_collection or (
+            sys_snap.timestamp if sys_snap else
+            node_snap.timestamp if node_snap else None
+        )
+
         return {
-            "timestamp": (
-                sys_snap.timestamp.isoformat() if sys_snap else
-                node_snap.timestamp.isoformat() if node_snap else None
-            ),
+            "timestamp": best_ts.isoformat() if best_ts else None,
             "system": {
                 "running_jobs": sys_snap.running_jobs if sys_snap else len(running_jobs),
                 "queued_jobs": sys_snap.queued_jobs if sys_snap else sum(queued_by_q.values()),
@@ -299,6 +344,7 @@ def create_app(config=None) -> FastAPI:
             "state_counts": state_counts,
             "jobs": {
                 "running": running_jobs,
+                "queued": queued_jobs,
             },
             "queues": queues,
         }
