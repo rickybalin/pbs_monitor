@@ -181,7 +181,7 @@
         <footer class="footer-section">
             <div class="panel queue-status-panel">
                 <div class="panel-header">
-                    <h2>Queue Status</h2>
+                    <h2>Queue Status <span class="queue-unit">(node-hours)</span></h2>
                     <span class="queue-legend">
                         <span class="c-run">■ running</span>
                         <span class="c-que">■ queued</span>
@@ -197,9 +197,9 @@
                             <div class="bar-segment held"    :style="{ width: q.heldPctScaled    + '%' }" :title="'Held: '    + q.held"></div>
                         </div>
                         <span class="queue-counts">
-                            <span class="c-run">{{ q.running }}</span> /
-                            <span class="c-que">{{ q.queued }}</span> /
-                            <span class="c-hel">{{ q.held }}</span>
+                            <span class="c-run">{{ fmtNodeHours(q.running) }}</span> /
+                            <span class="c-que">{{ fmtNodeHours(q.queued) }}</span> /
+                            <span class="c-hel">{{ fmtNodeHours(q.held) }}</span>
                         </span>
                     </div>
                     <div v-if="sortedQueues.length === 0" class="empty-row" style="padding:1rem">No active queues</div>

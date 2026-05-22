@@ -405,6 +405,12 @@ createApp({
             if (h >= 24) return (h / 24).toFixed(1) + 'd';
             return h.toFixed(1) + 'h';
         }
+        function fmtNodeHours(nh) {
+            if (nh == null || nh === 0) return '0';
+            if (nh >= 1000) return (nh / 1000).toFixed(1) + 'k';
+            if (nh >= 10) return Math.round(nh).toString();
+            return nh.toFixed(1);
+        }
         function highlightJob(jid) { hoveredJobId.value = jid; requestAnimationFrame(drawMap); }
         function clearHighlight()   { hoveredJobId.value = null; requestAnimationFrame(drawMap); }
         function selectJob(jid)     { selectedJobId.value = (selectedJobId.value === jid) ? null : jid; requestAnimationFrame(drawMap); }
@@ -441,7 +447,7 @@ createApp({
             sortedRunningJobs, sortedQueuedJobs, sortedQueues,
             fetchData, sortJobs, sortQueuedJobs, selectJob, highlightJob, clearHighlight, isOverdue,
             onCanvasMove, onCanvasLeave, onCanvasClick,
-            fmtDuration, fmtScore, queueColor,
+            fmtDuration, fmtScore, fmtNodeHours, queueColor,
         };
     }
 }).mount('#app');

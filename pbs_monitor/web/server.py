@@ -335,35 +335,40 @@ def create_app(config=None) -> FastAPI:
         # --- held jobs count ---
         held_count = db.query(func.count(Job.job_id)).filter(Job.state == JobState.HELD).scalar() or 0
 
-        # --- queue counts for queue status bars ---
-        queued_by_q: dict[str, int] = {}
-        for j in queued_jobs:
-            q = j["queue"]
-            queued_by_q[q] = queued_by_q.get(q, 0) + 1
-        held_by_q = dict(
-            db.query(Job.queue, func.count(Job.job_id))
-            .filter(Job.state == JobState.HELD)
-            .group_by(Job.queue)
-            .all()
-        )
+        # --- queue node-hours for queue status bars ---
+        def _job_node_hours(job) -> float:
+            """Compute node-hours for a job: nodes × walltime_hours."""
+            nodes = job.nodes or 1
+            wt_sec = _parse_walltime(job.walltime) or 3600
+            return nodes * wt_sec / 3600.0
 
-        # --- queue status from current job state ---
-        # Use actual job counts rather than potentially-stale queue snapshots
-        running_by_q = dict(
-            db.query(Job.queue, func.count(Job.job_id))
-            .filter(Job.state == JobState.RUNNING)
-            .group_by(Job.queue)
-            .all()
-        )
-        all_queue_names = set(running_by_q) | set(queued_by_q) | set(held_by_q)
+        # Accumulate node-hours per queue per state
+        nh_running: dict[str, float] = {}
+        nh_queued: dict[str, float] = {}
+        nh_held: dict[str, float] = {}
+
+        for job in running_rows:
+            q = job.queue or ""
+            nh_running[q] = nh_running.get(q, 0) + _job_node_hours(job)
+
+        for job in queued_rows:
+            q = job.queue or ""
+            nh_queued[q] = nh_queued.get(q, 0) + _job_node_hours(job)
+
+        held_rows = db.query(Job).filter(Job.state == JobState.HELD).all()
+        for job in held_rows:
+            q = job.queue or ""
+            nh_held[q] = nh_held.get(q, 0) + _job_node_hours(job)
+
+        all_queue_names = set(nh_running) | set(nh_queued) | set(nh_held)
 
         queues = []
         for qname in all_queue_names:
             if not qname:
                 continue
-            r = running_by_q.get(qname, 0)
-            q = queued_by_q.get(qname, 0)
-            h = held_by_q.get(qname, 0)
+            r = round(nh_running.get(qname, 0), 1)
+            q = round(nh_queued.get(qname, 0), 1)
+            h = round(nh_held.get(qname, 0), 1)
             total = r + q + h
             if total == 0:
                 continue
@@ -372,10 +377,7 @@ def create_app(config=None) -> FastAPI:
                 "running": r,
                 "queued": q,
                 "held": h,
-                "total": total,
-                "runningPct": round(r / total * 100, 1),
-                "queuedPct": round(q / total * 100, 1),
-                "heldPct": round(h / total * 100, 1),
+                "total": round(total, 1),
             })
 
         # Use the freshest timestamp available
@@ -388,8 +390,8 @@ def create_app(config=None) -> FastAPI:
             "timestamp": best_ts.isoformat() if best_ts else None,
             "system": {
                 "running_jobs": sys_snap.running_jobs if sys_snap else len(running_jobs),
-                "queued_jobs": sys_snap.queued_jobs if sys_snap else sum(queued_by_q.values()),
-                "held_jobs": sys_snap.held_jobs if sys_snap else sum(held_by_q.values()),
+                "queued_jobs": sys_snap.queued_jobs if sys_snap else len(queued_rows),
+                "held_jobs": sys_snap.held_jobs if sys_snap else held_count,
                 "utilization_percent": round(sys_snap.system_utilization_percent or 0, 1) if sys_snap else 0,
                 "total_nodes": sys_snap.total_nodes if sys_snap else 0,
                 "available_nodes": sys_snap.available_nodes if sys_snap else 0,
