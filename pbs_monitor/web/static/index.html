@@ -60,13 +60,13 @@
             <!-- Node Map -->
             <section class="panel node-map-panel">
                 <div class="panel-header">
-                    <h2>Node Map</h2>
+                    <h2>Node Map ({{ totalComputeNodes }})</h2>
                     <div class="legend">
-                        <span class="legend-item"><i class="color-box" style="background:#4ade80"></i>Free</span>
-                        <span class="legend-item"><i class="color-box" style="background:#3b82f6"></i>Job</span>
-                        <span class="legend-item"><i class="color-box" style="background:#a855f7"></i>Resv</span>
-                        <span class="legend-item"><i class="color-box" style="background:#ef4444"></i>Down</span>
-                        <span class="legend-item"><i class="color-box" style="background:#6b7280"></i>Offline</span>
+                        <span class="legend-item"><i class="color-box" style="background:#4ade80"></i>Free {{ stateCounts['free'] || 0 }}</span>
+                        <span class="legend-item"><i class="color-box" style="background:#3b82f6"></i>Job {{ stateCounts['job-exclusive'] || 0 }}</span>
+                        <span class="legend-item"><i class="color-box" style="background:#a855f7"></i>Resv {{ stateCounts['resv-exclusive'] || 0 }}</span>
+                        <span class="legend-item"><i class="color-box" style="background:#ef4444"></i>Down {{ stateCounts['down'] || 0 }}</span>
+                        <span class="legend-item"><i class="color-box" style="background:#6b7280"></i>Offline {{ stateCounts['offline'] || 0 }}</span>
                     </div>
                 </div>
                 <div class="canvas-container" ref="mapContainer"

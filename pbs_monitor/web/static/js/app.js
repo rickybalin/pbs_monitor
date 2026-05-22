@@ -91,6 +91,8 @@ createApp({
 
         const systemName = computed(() => systemInfo.value?.system_name || 'PBS Monitor');
         const utilization = computed(() => snapshot.value?.system?.utilization_percent ?? 0);
+        const totalComputeNodes = computed(() => (systemInfo.value?.node_index || []).length);
+        const stateCounts = computed(() => snapshot.value?.state_counts || {});
 
         const jobCounts = computed(() => {
             const s = snapshot.value;
@@ -378,7 +380,7 @@ createApp({
             systemInfo, snapshot, loading, error,
             activeTab, sortKey, sortDesc, selectedJobId, hoveredJobId,
             nodeCanvas, mapContainer, tooltip, tooltipStyle,
-            systemName, utilization, jobCounts, freshnessClass, timeSinceLastUpdate,
+            systemName, utilization, totalComputeNodes, stateCounts, jobCounts, freshnessClass, timeSinceLastUpdate,
             sortedRunningJobs, sortedQueuedJobs, sortedQueues,
             fetchData, sortJobs, selectJob, highlightJob, clearHighlight, isOverdue,
             onCanvasMove, onCanvasLeave, onCanvasClick,
