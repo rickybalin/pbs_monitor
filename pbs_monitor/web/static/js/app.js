@@ -182,8 +182,22 @@ createApp({
             );
         });
 
+        const QUEUE_THRESHOLD = 100; // node-hours below which a queue is collapsed into "other"
         const sortedQueues = computed(() => {
-            const qs = [...(snapshot.value?.queues || [])].filter(q => q.total > 0).sort((a, b) => b.total - a.total);
+            const all = [...(snapshot.value?.queues || [])].filter(q => q.total > 0);
+            const shown = all.filter(q => q.total >= QUEUE_THRESHOLD || q.name.includes('debug'));
+            const other = all.filter(q => q.total < QUEUE_THRESHOLD && !q.name.includes('debug'));
+            let qs = shown.sort((a, b) => b.total - a.total);
+            if (other.length > 0) {
+                const otherRow = other.reduce((acc, q) => ({
+                    name: 'other',
+                    running: acc.running + q.running,
+                    queued:  acc.queued  + q.queued,
+                    held:    acc.held    + q.held,
+                    total:   acc.total   + q.total,
+                }), { name: 'other', running: 0, queued: 0, held: 0, total: 0 });
+                qs = [...qs, otherRow];
+            }
             const maxTotal = qs.length > 0 ? Math.max(...qs.map(q => q.total)) : 1;
             return qs.map(q => ({
                 ...q,
@@ -372,19 +386,7 @@ createApp({
                 }
             }
 
-            // Draw rack labels
-            if (rackLayout.length > 0) {
-                const fontSize = Math.max(7, Math.min(10, cellSize - 1));
-                ctx.font = `${fontSize}px -apple-system, sans-serif`;
-                ctx.fillStyle = '#64748b';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'top';
-                for (const rack of rackLayout) {
-                    // Show short label: last 2 digits of rack name (e.g. "01" from "x3001")
-                    const shortLabel = rack.name.slice(-2);
-                    ctx.fillText(shortLabel, rack.x, rack.y);
-                }
-            }
+            // Rack labels intentionally omitted — too small to read at scale
         }
 
         // ── canvas interaction ──
@@ -465,10 +467,10 @@ createApp({
         }
         function fmtScore(score) {
             if (score == null) return '--';
-            // Score is eligible_time in seconds; show as hours
-            const h = score / 3600;
-            if (h >= 24) return (h / 24).toFixed(1) + 'd';
-            return h.toFixed(1) + 'h';
+            // Score is a dimensionless WFP priority value; display as plain number
+            if (score >= 1e6) return (score / 1e6).toFixed(2) + 'M';
+            if (score >= 1e3) return (score / 1e3).toFixed(1) + 'k';
+            return score.toFixed(1);
         }
         function fmtNodeHours(nh) {
             if (nh == null || nh === 0) return '0';
