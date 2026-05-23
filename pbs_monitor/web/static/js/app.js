@@ -18,6 +18,24 @@ const STATE_CHAR_LABELS = {
 };
 const FALLBACK_COLOR = '#1f2937';
 
+// Maps legend hover keys → the state chars that belong to that group
+const LEGEND_STATE_CHARS = {
+    free:    new Set(['A']),
+    job:     new Set(['E','F','L']),
+    resv:    new Set(['G','H','L','M']),
+    down:    new Set(['C','I','J','K']),
+    offline: new Set(['B','I','K','M']),
+};
+
+// Brighten a hex color for the legend-hover highlight
+function brightenColor(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = Math.min(255, ((n >> 16) & 0xff) + 80);
+    const g = Math.min(255, ((n >>  8) & 0xff) + 80);
+    const b = Math.min(255, ( n        & 0xff) + 80);
+    return '#' + [r, g, b].map(v => v.toString(16).padStart(2,'0')).join('');
+}
+
 const JOB_PALETTE = [
     '#3b82f6','#2563eb','#1d4ed8','#1e40af','#1e3a8a',
     '#60a5fa','#0ea5e9','#0284c7','#0369a1','#075985',
@@ -77,8 +95,9 @@ createApp({
         const sortDesc     = ref(true);
         const queuedSortKey  = ref('score');
         const queuedSortDesc = ref(true);
-        const selectedJobId = ref(null);
-        const hoveredJobId  = ref(null);
+        const selectedJobId  = ref(null);
+        const hoveredJobId   = ref(null);
+        const hoveredLegend  = ref(null);  // 'free'|'job'|'resv'|'down'|'offline'|null
         const filterText    = ref('');
 
         const nodeCanvas   = ref(null);
@@ -364,6 +383,7 @@ createApp({
                 : selectedJobId.value
                     ? jobToIndices.get(selectedJobId.value)
                     : null;
+            const legendChars = hoveredLegend.value ? LEGEND_STATE_CHARS[hoveredLegend.value] : null;
 
             for (const cell of layout) {
                 // Map layout position → snapshot_data index
@@ -374,6 +394,11 @@ createApp({
                 if ('EFL'.includes(ch)) {
                     const jid = nodeToJobMap.get(cell.idx);
                     if (jid) color = jobColor(jid);
+                }
+
+                // Legend hover: brighten matching nodes, dim everything else
+                if (legendChars) {
+                    color = legendChars.has(ch) ? brightenColor(STATE_COLORS[ch] || FALLBACK_COLOR) : '#111827';
                 }
 
                 ctx.fillStyle = color;
@@ -481,6 +506,8 @@ createApp({
         function highlightJob(jid) { hoveredJobId.value = jid; requestAnimationFrame(drawMap); }
         function clearHighlight()   { hoveredJobId.value = null; requestAnimationFrame(drawMap); }
         function selectJob(jid)     { selectedJobId.value = (selectedJobId.value === jid) ? null : jid; requestAnimationFrame(drawMap); }
+        function hoverLegend(key)   { hoveredLegend.value = key; requestAnimationFrame(drawMap); }
+        function clearLegend()      { hoveredLegend.value = null; requestAnimationFrame(drawMap); }
         function isOverdue(job)     { return job.remaining_seconds <= 0 && job.elapsed_seconds > 0; }
 
         const tooltipStyle = computed(() => ({ left: tooltip.x + 'px', top: tooltip.y + 'px' }));
@@ -512,7 +539,7 @@ createApp({
             nodeCanvas, mapContainer, tooltip, tooltipStyle,
             systemName, utilization, busyNodes, totalComputeNodes, stateCounts, jobCounts, freshnessClass, timeSinceLastUpdate,
             sortedRunningJobs, sortedQueuedJobs, filteredRunningJobs, filteredQueuedJobs, sortedQueues,
-            fetchData, sortJobs, sortQueuedJobs, selectJob, highlightJob, clearHighlight, isOverdue,
+            fetchData, sortJobs, sortQueuedJobs, selectJob, highlightJob, clearHighlight, hoverLegend, clearLegend, isOverdue,
             onCanvasMove, onCanvasLeave, onCanvasClick,
             fmtDuration, fmtScore, fmtNodeHours, queueColor,
         };
