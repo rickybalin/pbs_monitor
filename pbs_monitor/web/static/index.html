@@ -102,25 +102,32 @@
                         </button>
                     </div>
                 </div>
+                <div class="filter-bar">
+                    <input type="text" v-model="filterText"
+                           :placeholder="activeTab === 'running' ? 'Filter by owner, project, ID, queue…' : 'Filter by owner, project, ID, queue…'">
+                    <span class="filter-count" v-if="filterText">
+                        {{ activeTab === 'running' ? filteredRunningJobs.length : filteredQueuedJobs.length }} matches
+                    </span>
+                </div>
                 <div class="table-wrapper">
                     <!-- Running Jobs Table -->
                     <table v-if="activeTab === 'running'" class="jobs-table">
                         <thead>
                             <tr>
-                                <th @click="sortJobs('score')">Score</th>
-                                <th @click="sortJobs('job_id')">ID</th>
-                                <th @click="sortJobs('owner')">Owner</th>
-                                <th @click="sortJobs('project')">Project</th>
-                                <th @click="sortJobs('allocation_type')">Allocation</th>
-                                <th @click="sortJobs('queue')">Queue</th>
-                                <th @click="sortJobs('nodes')">Nodes</th>
-                                <th @click="sortJobs('walltime')">Walltime</th>
-                                <th @click="sortJobs('elapsed_seconds')">Run Time</th>
-                                <th @click="sortJobs('queue_time_seconds')">Queue Time</th>
+                                <th @click="sortJobs('score')">Score<span v-if="sortKey==='score'" class="sort-arrow">{{ sortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortJobs('job_id')">ID<span v-if="sortKey==='job_id'" class="sort-arrow">{{ sortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortJobs('owner')">Owner<span v-if="sortKey==='owner'" class="sort-arrow">{{ sortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortJobs('project')">Project<span v-if="sortKey==='project'" class="sort-arrow">{{ sortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortJobs('allocation_type')">Allocation<span v-if="sortKey==='allocation_type'" class="sort-arrow">{{ sortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortJobs('queue')">Queue<span v-if="sortKey==='queue'" class="sort-arrow">{{ sortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortJobs('nodes')">Nodes<span v-if="sortKey==='nodes'" class="sort-arrow">{{ sortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortJobs('walltime')">Walltime<span v-if="sortKey==='walltime'" class="sort-arrow">{{ sortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortJobs('elapsed_seconds')">Run Time<span v-if="sortKey==='elapsed_seconds'" class="sort-arrow">{{ sortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortJobs('queue_time_seconds')">Queue Time<span v-if="sortKey==='queue_time_seconds'" class="sort-arrow">{{ sortDesc ? '▼' : '▲' }}</span></th>
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="job in sortedRunningJobs" :key="job.job_id"
+                            <tr v-for="job in filteredRunningJobs" :key="job.job_id"
                                 :id="'job-row-' + job.job_id"
                                 @mouseenter="highlightJob(job.job_id)"
                                 @mouseleave="clearHighlight"
@@ -147,19 +154,19 @@
                     <table v-if="activeTab === 'queued'" class="jobs-table">
                         <thead>
                             <tr>
-                                <th @click="sortQueuedJobs('score')">Score</th>
-                                <th @click="sortQueuedJobs('job_id')">ID</th>
-                                <th @click="sortQueuedJobs('owner')">Owner</th>
-                                <th @click="sortQueuedJobs('project')">Project</th>
-                                <th @click="sortQueuedJobs('allocation_type')">Allocation</th>
-                                <th @click="sortQueuedJobs('queue')">Queue</th>
-                                <th @click="sortQueuedJobs('nodes')">Nodes</th>
-                                <th @click="sortQueuedJobs('walltime')">Walltime</th>
-                                <th @click="sortQueuedJobs('queue_time_seconds')">Queue Time</th>
+                                <th @click="sortQueuedJobs('score')">Score<span v-if="queuedSortKey==='score'" class="sort-arrow">{{ queuedSortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortQueuedJobs('job_id')">ID<span v-if="queuedSortKey==='job_id'" class="sort-arrow">{{ queuedSortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortQueuedJobs('owner')">Owner<span v-if="queuedSortKey==='owner'" class="sort-arrow">{{ queuedSortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortQueuedJobs('project')">Project<span v-if="queuedSortKey==='project'" class="sort-arrow">{{ queuedSortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortQueuedJobs('allocation_type')">Allocation<span v-if="queuedSortKey==='allocation_type'" class="sort-arrow">{{ queuedSortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortQueuedJobs('queue')">Queue<span v-if="queuedSortKey==='queue'" class="sort-arrow">{{ queuedSortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortQueuedJobs('nodes')">Nodes<span v-if="queuedSortKey==='nodes'" class="sort-arrow">{{ queuedSortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortQueuedJobs('walltime')">Walltime<span v-if="queuedSortKey==='walltime'" class="sort-arrow">{{ queuedSortDesc ? '▼' : '▲' }}</span></th>
+                                <th @click="sortQueuedJobs('queue_time_seconds')">Queue Time<span v-if="queuedSortKey==='queue_time_seconds'" class="sort-arrow">{{ queuedSortDesc ? '▼' : '▲' }}</span></th>
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="job in sortedQueuedJobs" :key="job.job_id">
+                            <tr v-for="job in filteredQueuedJobs" :key="job.job_id">
                                 <td class="score-cell">{{ fmtScore(job.score) }}</td>
                                 <td>{{ job.job_id }}</td>
                                 <td>{{ job.owner }}</td>

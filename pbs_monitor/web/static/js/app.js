@@ -79,12 +79,14 @@ createApp({
         const queuedSortDesc = ref(true);
         const selectedJobId = ref(null);
         const hoveredJobId  = ref(null);
+        const filterText    = ref('');
 
         const nodeCanvas   = ref(null);
         const mapContainer = ref(null);
         const tooltip = reactive({ visible: false, x: 0, y: 0, nodeName: '', state: '', jobId: '', owner: '', project: '', queue: '' });
 
         let layout = [];
+        let rackLayout = [];  // {x, y, name} for rack labels
         let cellSize = 10;
         let nodeToJobMap = new Map();
         let jobToIndices = new Map();
@@ -137,6 +139,19 @@ createApp({
         }
 
         const sortedRunningJobs = computed(() => sortedList(snapshot.value?.jobs?.running || []));
+
+        const filteredRunningJobs = computed(() => {
+            const q = filterText.value.trim().toLowerCase();
+            if (!q) return sortedRunningJobs.value;
+            return sortedRunningJobs.value.filter(j =>
+                (j.owner || '').toLowerCase().includes(q) ||
+                (j.project || '').toLowerCase().includes(q) ||
+                String(j.job_id).includes(q) ||
+                (j.queue || '').toLowerCase().includes(q) ||
+                (j.allocation_type || '').toLowerCase().includes(q)
+            );
+        });
+
         const sortedQueuedJobs  = computed(() => {
             const list = snapshot.value?.jobs?.queued || [];
             const key = queuedSortKey.value;
@@ -153,6 +168,18 @@ createApp({
                 if (va > vb) return queuedSortDesc.value ? -1 : 1;
                 return 0;
             });
+        });
+
+        const filteredQueuedJobs = computed(() => {
+            const q = filterText.value.trim().toLowerCase();
+            if (!q) return sortedQueuedJobs.value;
+            return sortedQueuedJobs.value.filter(j =>
+                (j.owner || '').toLowerCase().includes(q) ||
+                (j.project || '').toLowerCase().includes(q) ||
+                String(j.job_id).includes(q) ||
+                (j.queue || '').toLowerCase().includes(q) ||
+                (j.allocation_type || '').toLowerCase().includes(q)
+            );
         });
 
         const sortedQueues = computed(() => {
@@ -233,6 +260,7 @@ createApp({
                 const nRacks = rackNames.length;
                 const maxInRack = Math.max(...nodesPerRack);
                 const gap = 2;
+                const labelHeight = 14;  // space for rack labels below each group
 
                 // Try fitting all racks in one row first, then wrap
                 const racksPerRow = Math.min(nRacks, Math.max(10, Math.floor(containerW / 20)));
@@ -242,22 +270,27 @@ createApp({
                 cellSize = Math.max(3, Math.min(14, Math.floor((containerW - (racksPerRow - 1) * gap) / racksPerRow)));
 
                 layout = [];
+                rackLayout = [];
                 let globalIdx = 0;
 
                 for (let ri = 0; ri < nRacks; ri++) {
                     const col = ri % racksPerRow;
                     const row = Math.floor(ri / racksPerRow);
                     const xOff = col * (cellSize + gap);
-                    const yOff = row * (maxInRack * (cellSize + 1) + gap * 6);
+                    const yOff = row * (maxInRack * (cellSize + 1) + labelHeight + gap * 4);
 
                     for (let ni = 0; ni < nodesPerRack[ri]; ni++) {
                         layout.push({ x: xOff, y: yOff + ni * (cellSize + 1), idx: globalIdx });
                         globalIdx++;
                     }
+
+                    // Store rack label position (centered below nodes)
+                    const labelY = yOff + nodesPerRack[ri] * (cellSize + 1) + 2;
+                    rackLayout.push({ x: xOff + cellSize / 2, y: labelY, name: rackNames[ri] });
                 }
 
                 const maxX = Math.max(...layout.map(l => l.x)) + cellSize;
-                const maxY = Math.max(...layout.map(l => l.y)) + cellSize;
+                const maxY = Math.max(...rackLayout.map(r => r.y)) + labelHeight;
                 canvas.width = maxX;
                 canvas.height = maxY;
                 canvas.style.width = maxX + 'px';
@@ -318,6 +351,20 @@ createApp({
                     ctx.strokeStyle = '#ffffff';
                     ctx.lineWidth = 1.5;
                     ctx.strokeRect(cell.x - 0.5, cell.y - 0.5, cellSize + 1, cellSize + 1);
+                }
+            }
+
+            // Draw rack labels
+            if (rackLayout.length > 0) {
+                const fontSize = Math.max(7, Math.min(10, cellSize - 1));
+                ctx.font = `${fontSize}px -apple-system, sans-serif`;
+                ctx.fillStyle = '#64748b';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                for (const rack of rackLayout) {
+                    // Show short label: last 2 digits of rack name (e.g. "01" from "x3001")
+                    const shortLabel = rack.name.slice(-2);
+                    ctx.fillText(shortLabel, rack.x, rack.y);
                 }
             }
         }
@@ -441,10 +488,10 @@ createApp({
 
         return {
             systemInfo, snapshot, loading, error,
-            activeTab, sortKey, sortDesc, queuedSortKey, queuedSortDesc, selectedJobId, hoveredJobId,
+            activeTab, sortKey, sortDesc, queuedSortKey, queuedSortDesc, selectedJobId, hoveredJobId, filterText,
             nodeCanvas, mapContainer, tooltip, tooltipStyle,
             systemName, utilization, busyNodes, totalComputeNodes, stateCounts, jobCounts, freshnessClass, timeSinceLastUpdate,
-            sortedRunningJobs, sortedQueuedJobs, sortedQueues,
+            sortedRunningJobs, sortedQueuedJobs, filteredRunningJobs, filteredQueuedJobs, sortedQueues,
             fetchData, sortJobs, sortQueuedJobs, selectJob, highlightJob, clearHighlight, isOverdue,
             onCanvasMove, onCanvasLeave, onCanvasClick,
             fmtDuration, fmtScore, fmtNodeHours, queueColor,
