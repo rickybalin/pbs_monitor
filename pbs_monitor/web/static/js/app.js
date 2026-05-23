@@ -262,17 +262,27 @@ createApp({
                 const maxInRack = Math.max(...nodesPerRack);
                 const gap = 2;
                 const labelHeight = 14;  // space for rack labels below each group
+                const rowOverhead = labelHeight + gap * 4; // non-node vertical cost per rack row
 
-                // Try fitting all racks in one row first, then wrap
-                const racksPerRow = Math.min(nRacks, Math.max(10, Math.floor(containerW / 20)));
-                const rackRows = Math.ceil(nRacks / racksPerRow);
-
-                // Derive cellSize from width, then clamp so total height fits MAX_CANVAS_HEIGHT.
-                // Each rack column is: maxInRack*(cellSize+1) tall, plus label + gap per row.
-                const cellFromWidth = Math.floor((containerW - (racksPerRow - 1) * gap) / racksPerRow);
-                const rowOverhead = labelHeight + gap * 4;  // non-node vertical cost per rack row
-                const cellFromHeight = Math.floor((MAX_CANVAS_HEIGHT - rackRows * rowOverhead) / (rackRows * (maxInRack + 1)));
-                cellSize = Math.max(2, Math.min(14, Math.min(cellFromWidth, cellFromHeight)));
+                // Find the largest cellSize (1–14) where the map fits within both
+                // containerW (width) and MAX_CANVAS_HEIGHT (height) simultaneously.
+                // For each candidate, compute the minimum racksPerRow needed to keep
+                // height ≤ MAX_CANVAS_HEIGHT, then check the resulting width fits too.
+                let bestCell = 1;
+                let bestRacksPerRow = nRacks;
+                for (let cs = 14; cs >= 1; cs--) {
+                    const rackH = maxInRack * (cs + 1) + rowOverhead; // height of one rack row
+                    const maxRows = Math.max(1, Math.floor(MAX_CANVAS_HEIGHT / rackH));
+                    const rpr = Math.ceil(nRacks / maxRows); // racks per row needed
+                    const totalW = rpr * (cs + gap) - gap;   // canvas width that results
+                    if (totalW <= containerW) {
+                        bestCell = cs;
+                        bestRacksPerRow = rpr;
+                        break;
+                    }
+                }
+                cellSize = bestCell;
+                const racksPerRow = bestRacksPerRow;
 
                 layout = [];
                 rackLayout = [];
@@ -282,7 +292,7 @@ createApp({
                     const col = ri % racksPerRow;
                     const row = Math.floor(ri / racksPerRow);
                     const xOff = col * (cellSize + gap);
-                    const yOff = row * (maxInRack * (cellSize + 1) + labelHeight + gap * 4);
+                    const yOff = row * (maxInRack * (cellSize + 1) + rowOverhead);
 
                     for (let ni = 0; ni < nodesPerRack[ri]; ni++) {
                         layout.push({ x: xOff, y: yOff + ni * (cellSize + 1), idx: globalIdx });
