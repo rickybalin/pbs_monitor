@@ -226,6 +226,7 @@ def create_app(config=None) -> FastAPI:
     connect_args: dict[str, Any] = {}
     if db_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
+        connect_args["timeout"] = 30  # wait up to 30s if the collector holds a write lock
 
     engine = create_engine(db_url, connect_args=connect_args)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
