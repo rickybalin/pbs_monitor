@@ -252,6 +252,7 @@ createApp({
             if (totalNodes === 0) return;
 
             const containerW = container.clientWidth - 24; // padding
+            const MAX_CANVAS_HEIGHT = 500;                  // px — keeps the map compact on large systems
             const topo = systemInfo.value.topology;
             const rackNames = topo?.rack_names || [];
             const nodesPerRack = topo?.nodes_per_rack || [];
@@ -266,8 +267,12 @@ createApp({
                 const racksPerRow = Math.min(nRacks, Math.max(10, Math.floor(containerW / 20)));
                 const rackRows = Math.ceil(nRacks / racksPerRow);
 
-                // Each rack is 1 cell wide, maxInRack cells tall
-                cellSize = Math.max(3, Math.min(14, Math.floor((containerW - (racksPerRow - 1) * gap) / racksPerRow)));
+                // Derive cellSize from width, then clamp so total height fits MAX_CANVAS_HEIGHT.
+                // Each rack column is: maxInRack*(cellSize+1) tall, plus label + gap per row.
+                const cellFromWidth = Math.floor((containerW - (racksPerRow - 1) * gap) / racksPerRow);
+                const rowOverhead = labelHeight + gap * 4;  // non-node vertical cost per rack row
+                const cellFromHeight = Math.floor((MAX_CANVAS_HEIGHT - rackRows * rowOverhead) / (rackRows * (maxInRack + 1)));
+                cellSize = Math.max(2, Math.min(14, Math.min(cellFromWidth, cellFromHeight)));
 
                 layout = [];
                 rackLayout = [];
@@ -297,8 +302,11 @@ createApp({
                 canvas.style.height = maxY + 'px';
             } else {
                 const cols = Math.ceil(Math.sqrt(totalNodes * 1.5));
-                cellSize = Math.max(3, Math.min(12, Math.floor(containerW / cols)));
                 const rows = Math.ceil(totalNodes / cols);
+                // Clamp cellSize to fit both width and MAX_CANVAS_HEIGHT
+                const cellFromWidth = Math.floor(containerW / cols);
+                const cellFromHeight = Math.floor(MAX_CANVAS_HEIGHT / rows);
+                cellSize = Math.max(2, Math.min(12, Math.min(cellFromWidth, cellFromHeight)));
                 layout = [];
                 for (let i = 0; i < totalNodes; i++) {
                     layout.push({
