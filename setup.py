@@ -45,6 +45,9 @@ setup(
    author_email='contact@pbs-monitor.org',
    url='https://github.com/jtchilders/pbs_monitor',
    packages=find_packages(),
+   package_data={
+      'pbs_monitor.web': ['static/**/*'],
+   },
    python_requires='>=3.8',
    install_requires=read_requirements(),
    extras_require={

@@ -886,6 +886,29 @@ Examples:
       help="Duration of each frame in GIF in milliseconds (default: 1000)"
    )
 
+   # Web dashboard command
+   web_parser = subparsers.add_parser(
+      "web",
+      help="Start the web dashboard server"
+   )
+   web_parser.add_argument(
+      "--port",
+      type=int,
+      default=8080,
+      help="Port to bind to (default: 8080)"
+   )
+   web_parser.add_argument(
+      "--host",
+      type=str,
+      default="127.0.0.1",
+      help="Host to bind to (default: 127.0.0.1, localhost only)"
+   )
+   web_parser.add_argument(
+      "--no-browser",
+      action="store_true",
+      help="Don't attempt to open browser automatically"
+   )
+
    # Config command
    config_parser = subparsers.add_parser(
       "config",
@@ -1179,6 +1202,36 @@ def main(argv: Optional[List[str]] = None) -> int:
    if args.command == "daemon":
       cmd = DaemonCommand(None, config)  # No need for collector
       return cmd.execute(args)
+
+   # Handle web command (doesn't need PBS connection)
+   if args.command == "web":
+       try:
+           import uvicorn
+           from pbs_monitor.web.server import create_app
+           
+           app = create_app(config)
+           host = args.host
+           port = args.port
+           
+           print(f"Starting PBS Monitor Dashboard on http://{host}:{port}")
+           print(f"Database: {config.database.url}")
+           print(f"")
+           print(f"Access via SSH tunnel:")
+           print(f"  ssh -L {port}:localhost:{port} $(hostname)")
+           print(f"  Then open http://localhost:{port} in your browser")
+           print(f"")
+           print("Press Ctrl+C to stop")
+           
+           uvicorn.run(app, host=host, port=port, log_level="info")
+           return 0
+       except ImportError as e:
+           print(f"Error: Missing web dependencies. Install with: pip install fastapi uvicorn[standard]", file=sys.stderr)
+           print(f"Details: {e}", file=sys.stderr)
+           return 1
+       except Exception as e:
+           logger.error(f"Web server error: {str(e)}")
+           print(f"Error: {str(e)}", file=sys.stderr)
+           return 1
    
    # Initialize data collector for other commands
    try:
