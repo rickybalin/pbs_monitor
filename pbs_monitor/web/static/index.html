@@ -186,38 +186,48 @@
             </section>
         </main>
 
-        <!-- ─── Queue Status ───────────────────────────────────────── -->
+        <!-- ─── Queue Depth ────────────────────────────────────────── -->
         <footer class="footer-section">
             <div class="panel queue-status-panel">
                 <div class="panel-header">
-                    <h2>Queue Status <span class="queue-unit">(node-hours)</span></h2>
+                    <h2>Queue Depth <span class="queue-unit">(system-hours)</span></h2>
+                    <div class="queue-depth-controls">
+                        <div class="queue-group-toggle">
+                            <button class="group-btn" :class="{ active: depthGroupBy === 'queue' }"       @click="depthGroupBy = 'queue'">By Queue</button>
+                            <button class="group-btn" :class="{ active: depthGroupBy === 'allocation' }"  @click="depthGroupBy = 'allocation'">By Allocation</button>
+                            <button class="group-btn" :class="{ active: depthGroupBy === 'project' }"     @click="depthGroupBy = 'project'">By Project</button>
+                        </div>
+                        <label class="held-toggle">
+                            <input type="checkbox" v-model="depthShowHeld"> Include Held
+                        </label>
+                    </div>
                     <span class="queue-legend">
                         <span class="c-run">■ running</span>
                         <span class="c-que">■ queued</span>
-                        <span class="c-hel">■ held</span>
+                        <span class="c-hel" v-if="depthShowHeld">■ held</span>
                     </span>
                 </div>
                 <div class="queue-bars">
-                    <div v-for="q in sortedQueues" :key="q.name" class="queue-bar-row">
+                    <div v-for="q in sortedDepthBuckets" :key="q.name" class="queue-bar-row">
                         <span class="queue-name">{{ q.name }}</span>
                         <div class="bar-container">
                             <div class="bar-segment running" :style="{ width: q.runningPctScaled + '%' }" :title="'Running: ' + q.running"></div>
                             <div class="bar-segment queued"  :style="{ width: q.queuedPctScaled  + '%' }" :title="'Queued: '  + q.queued"></div>
-                            <div class="bar-segment held"    :style="{ width: q.heldPctScaled    + '%' }" :title="'Held: '    + q.held"></div>
+                            <div class="bar-segment held"    v-if="depthShowHeld" :style="{ width: q.heldPctScaled + '%' }" :title="'Held: ' + q.held"></div>
                         </div>
                         <span class="queue-counts">
-                            <span class="c-run">{{ fmtNodeHours(q.running) }}</span> /
-                            <span class="c-que">{{ fmtNodeHours(q.queued) }}</span> /
-                            <span class="c-hel">{{ fmtNodeHours(q.held) }}</span>
+                            <span class="c-run">{{ fmtSysHours(q.running) }}</span> /
+                            <span class="c-que">{{ fmtSysHours(q.queued) }}</span>
+                            <template v-if="depthShowHeld"> / <span class="c-hel">{{ fmtSysHours(q.held) }}</span></template>
                         </span>
                     </div>
-                    <div v-if="sortedQueues.length === 0" class="empty-row" style="padding:1rem">No active queues</div>
+                    <div v-if="sortedDepthBuckets.length === 0" class="empty-row" style="padding:1rem">No active queues</div>
                 </div>
             </div>
         </footer>
     </div>
 </div>
 
-<script src="js/app.js?v=4"></script>
+<script src="js/app.js?v=6"></script>
 </body>
 </html>
