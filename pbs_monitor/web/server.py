@@ -464,9 +464,29 @@ def create_app(config=None) -> FastAPI:
             nh_queued[q] = nh_queued.get(q, 0) + _job_node_hours(job)
 
         held_rows = db.query(Job).filter(Job.state == JobState.HELD).all()
+        held_jobs = []
         for job in held_rows:
             q = job.queue or ""
             nh_held[q] = nh_held.get(q, 0) + _job_node_hours(job)
+            queue_time = 0
+            if job.submit_time:
+                su = job.submit_time
+                if su.tzinfo is None:
+                    su = su.replace(tzinfo=timezone.utc)
+                queue_time = int((now - su).total_seconds())
+            held_jobs.append({
+                "job_id": _short_job_id(job.job_id),
+                "full_job_id": job.job_id,
+                "name": job.job_name or "",
+                "owner": job.owner or "",
+                "project": job.project or "",
+                "allocation_type": job.allocation_type or "",
+                "queue": job.queue or "",
+                "nodes": job.nodes or 1,
+                "walltime": job.walltime or "",
+                "queue_time_seconds": queue_time,
+                "score": _extract_job_score(job, _get_job_formula()),
+            })
 
         all_queue_names = set(nh_running) | set(nh_queued) | set(nh_held)
 
@@ -509,6 +529,7 @@ def create_app(config=None) -> FastAPI:
             "jobs": {
                 "running": running_jobs,
                 "queued": queued_jobs,
+                "held": held_jobs,
             },
             "queues": queues,
         }

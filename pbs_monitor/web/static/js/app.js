@@ -99,6 +99,8 @@ createApp({
         const hoveredJobId   = ref(null);
         const hoveredLegend  = ref(null);  // 'free'|'job'|'resv'|'down'|'offline'|null
         const filterText    = ref('');
+        const depthGroupBy   = ref('queue');   // 'queue' | 'allocation' | 'project'
+        const depthShowHeld  = ref(false);
 
         const nodeCanvas   = ref(null);
         const mapContainer = ref(null);
@@ -201,29 +203,97 @@ createApp({
             );
         });
 
-        const QUEUE_THRESHOLD = 100; // node-hours below which a queue is collapsed into "other"
-        const sortedQueues = computed(() => {
-            const all = [...(snapshot.value?.queues || [])].filter(q => q.total > 0);
-            const shown = all.filter(q => q.total >= QUEUE_THRESHOLD || q.name.includes('debug'));
-            const other = all.filter(q => q.total < QUEUE_THRESHOLD && !q.name.includes('debug'));
-            let qs = shown.sort((a, b) => b.total - a.total);
-            if (other.length > 0) {
-                const otherRow = other.reduce((acc, q) => ({
-                    name: 'other',
-                    running: acc.running + q.running,
-                    queued:  acc.queued  + q.queued,
-                    held:    acc.held    + q.held,
-                    total:   acc.total   + q.total,
-                }), { name: 'other', running: 0, queued: 0, held: 0, total: 0 });
-                qs = [...qs, otherRow];
-            }
-            const maxTotal = qs.length > 0 ? Math.max(...qs.map(q => q.total)) : 1;
-            return qs.map(q => ({
-                ...q,
-                runningPctScaled: (q.running / maxTotal * 100).toFixed(1),
-                queuedPctScaled:  (q.queued  / maxTotal * 100).toFixed(1),
-                heldPctScaled:    (q.held    / maxTotal * 100).toFixed(1),
+        const DEPTH_THRESHOLD = 100; // node-hours (internal) below which a bucket is collapsed into "other"
+
+        // Compute node-hours from a job object.
+        function jobNodeHours(job) {
+            const nodes = job.nodes || 1;
+            // walltime is "HH:MM:SS" or "H:MM:SS"
+            const wt = job.walltime || '';
+            const parts = wt.split(':').map(Number);
+            let wtSec = 3600;
+            if (parts.length === 3) wtSec = parts[0] * 3600 + parts[1] * 60 + parts[2];
+            else if (parts.length === 2) wtSec = parts[0] * 3600 + parts[1] * 60;
+            return nodes * wtSec / 3600;
+        }
+
+        function scaleBuckets(buckets, showHeld) {
+            const nNodes = totalComputeNodes.value || 1;
+            // Convert node-hours → system-hours for display
+            const toSysHours = nh => nh / nNodes;
+            const maxTotal = buckets.length > 0
+                ? Math.max(...buckets.map(b => b.running + b.queued + (showHeld ? b.held : 0)))
+                : 1;
+            const denom = maxTotal || 1;
+            return buckets.map(b => ({
+                ...b,
+                running: toSysHours(b.running),
+                queued:  toSysHours(b.queued),
+                held:    toSysHours(b.held),
+                runningPctScaled: (b.running / denom * 100).toFixed(1),
+                queuedPctScaled:  (b.queued  / denom * 100).toFixed(1),
+                heldPctScaled:    (b.held    / denom * 100).toFixed(1),
             }));
+        }
+
+        // Build bucket map from a jobs array keyed by a getter fn.
+        function accumulateBuckets(map, jobs, keyFn, state) {
+            for (const job of jobs) {
+                const key = keyFn(job) || '(unknown)';
+                if (!map[key]) map[key] = { name: key, running: 0, queued: 0, held: 0 };
+                map[key][state] += jobNodeHours(job);
+            }
+        }
+
+        const sortedDepthBuckets = computed(() => {
+            const groupBy   = depthGroupBy.value;
+            const showHeld  = depthShowHeld.value;
+            let buckets;
+
+            if (groupBy === 'queue') {
+                // Use pre-aggregated queue data from server (most accurate — includes all job states)
+                const all = [...(snapshot.value?.queues || [])].filter(q => q.total > 0);
+                // Compute effective total, hiding held when toggle is off
+                const effectiveTotal = q => q.running + q.queued + (showHeld ? q.held : 0);
+                const shown = all.filter(q => effectiveTotal(q) >= DEPTH_THRESHOLD || q.name.includes('debug'));
+                const other = all.filter(q => effectiveTotal(q) <  DEPTH_THRESHOLD && !q.name.includes('debug'));
+                buckets = shown.sort((a, b) => effectiveTotal(b) - effectiveTotal(a));
+                if (other.length > 0) {
+                    buckets = [...buckets, other.reduce((acc, q) => ({
+                        name: 'other',
+                        running: acc.running + q.running,
+                        queued:  acc.queued  + q.queued,
+                        held:    acc.held    + q.held,
+                        total:   acc.total   + q.total,
+                    }), { name: 'other', running: 0, queued: 0, held: 0, total: 0 })];
+                }
+            } else {
+                // Compute from per-job lists (allocation_type or project)
+                const keyFn = groupBy === 'allocation'
+                    ? j => j.allocation_type
+                    : j => j.project;
+                const map = {};
+                accumulateBuckets(map, snapshot.value?.jobs?.running || [], keyFn, 'running');
+                accumulateBuckets(map, snapshot.value?.jobs?.queued  || [], keyFn, 'queued');
+                if (showHeld) {
+                    accumulateBuckets(map, snapshot.value?.jobs?.held || [], keyFn, 'held');
+                }
+                const all = Object.values(map).filter(b => (b.running + b.queued + b.held) > 0);
+                const effectiveTotal = b => b.running + b.queued + (showHeld ? b.held : 0);
+                const shown = all.filter(b => effectiveTotal(b) >= DEPTH_THRESHOLD);
+                const other = all.filter(b => effectiveTotal(b) <  DEPTH_THRESHOLD);
+                buckets = shown.sort((a, b) => effectiveTotal(b) - effectiveTotal(a));
+                if (other.length > 0) {
+                    buckets = [...buckets, other.reduce((acc, b) => ({
+                        name: 'other',
+                        running: acc.running + b.running,
+                        queued:  acc.queued  + b.queued,
+                        held:    acc.held    + b.held,
+                    }), { name: 'other', running: 0, queued: 0, held: 0 })];
+                }
+            }
+
+            return scaleBuckets(buckets, showHeld);
         });
 
         // ── data fetching ──
@@ -497,11 +567,11 @@ createApp({
             if (score >= 1e3) return (score / 1e3).toFixed(1) + 'k';
             return score.toFixed(1);
         }
-        function fmtNodeHours(nh) {
-            if (nh == null || nh === 0) return '0';
-            if (nh >= 1000) return (nh / 1000).toFixed(1) + 'k';
-            if (nh >= 10) return Math.round(nh).toString();
-            return nh.toFixed(1);
+        function fmtSysHours(sh) {
+            if (sh == null || sh === 0) return '0';
+            if (sh >= 1000) return (sh / 1000).toFixed(1) + 'k';
+            if (sh >= 10) return Math.round(sh).toString();
+            return sh.toFixed(2);
         }
         function highlightJob(jid) { hoveredJobId.value = jid; requestAnimationFrame(drawMap); }
         function clearHighlight()   { hoveredJobId.value = null; requestAnimationFrame(drawMap); }
@@ -536,12 +606,13 @@ createApp({
         return {
             systemInfo, snapshot, loading, error,
             activeTab, sortKey, sortDesc, queuedSortKey, queuedSortDesc, selectedJobId, hoveredJobId, filterText,
+            depthGroupBy, depthShowHeld,
             nodeCanvas, mapContainer, tooltip, tooltipStyle,
             systemName, utilization, busyNodes, totalComputeNodes, stateCounts, jobCounts, freshnessClass, timeSinceLastUpdate,
-            sortedRunningJobs, sortedQueuedJobs, filteredRunningJobs, filteredQueuedJobs, sortedQueues,
+            sortedRunningJobs, sortedQueuedJobs, filteredRunningJobs, filteredQueuedJobs, sortedDepthBuckets,
             fetchData, sortJobs, sortQueuedJobs, selectJob, highlightJob, clearHighlight, hoverLegend, clearLegend, isOverdue,
             onCanvasMove, onCanvasLeave, onCanvasClick,
-            fmtDuration, fmtScore, fmtNodeHours, queueColor,
+            fmtDuration, fmtScore, fmtSysHours, queueColor,
         };
     }
 }).mount('#app');
