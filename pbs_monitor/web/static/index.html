@@ -247,7 +247,9 @@
                             <th @click="resvSortBy('owner')">Owner {{ resvSortArrow('owner') }}</th>
                             <th @click="resvSortBy('display_state')">State {{ resvSortArrow('display_state') }}</th>
                             <th @click="resvSortBy('nodes')">Nodes {{ resvSortArrow('nodes') }}</th>
-                            <th @click="resvSortBy('node_hours')">Node-Hours {{ resvSortArrow('node_hours') }}</th>
+                            <th @click="resvSortBy('node_hours_reserved')">Node-Hours {{ resvSortArrow('node_hours_reserved') }}</th>
+                            <th @click="resvSortBy('utilization_pct')">Utilization {{ resvSortArrow('utilization_pct') }}</th>
+                            <th @click="resvSortBy('jobs_submitted')">Jobs {{ resvSortArrow('jobs_submitted') }}</th>
                             <th @click="resvSortBy('start_time')">Start {{ resvSortArrow('start_time') }}</th>
                             <th @click="resvSortBy('end_time')">End {{ resvSortArrow('end_time') }}</th>
                             <th>Groups / Users</th>
@@ -259,7 +261,15 @@
                             <td>{{ r.owner }}</td>
                             <td><span class="resv-state-badge" :class="'resv-state-' + r.display_state">{{ r.display_state }}</span></td>
                             <td>{{ r.nodes ?? '—' }}</td>
-                            <td>{{ r.node_hours != null ? r.node_hours.toLocaleString() : '—' }}</td>
+                            <td>{{ r.node_hours_reserved != null ? r.node_hours_reserved.toLocaleString() : '—' }}</td>
+                            <td>
+                                <span v-if="r.utilization_pct != null" class="resv-util">
+                                    <span class="resv-util-bar-wrap"><span class="resv-util-bar" :style="{ width: Math.min(100, r.utilization_pct) + '%' }"></span></span>
+                                    {{ r.utilization_pct }}%
+                                </span>
+                                <span v-else class="resv-util-na">—</span>
+                            </td>
+                            <td>{{ r.jobs_submitted || '—' }}</td>
                             <td>{{ fmtIso(r.start_time) }}</td>
                             <td>{{ fmtIso(r.end_time) }}</td>
                             <td class="resv-groups">{{ [...(r.authorized_groups||[]), ...(r.authorized_users||[])].join(', ') || '—' }}</td>

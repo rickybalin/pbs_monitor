@@ -831,17 +831,23 @@ def create_app(config=None) -> FastAPI:
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(days=14)
         rows = db.execute(text("""
-            SELECT reservation_id, reservation_name, owner, state,
-                   nodes, ncpus, ngpus, walltime,
-                   start_time, end_time, duration_seconds,
-                   authorized_users, authorized_groups
-            FROM reservations
-            WHERE reservation_id LIKE 'R%'
+            SELECT r.reservation_id, r.reservation_name, r.owner, r.state,
+                   r.nodes, r.ncpus, r.ngpus, r.walltime,
+                   r.start_time, r.end_time, r.duration_seconds,
+                   r.authorized_users, r.authorized_groups,
+                   COUNT(j.job_id) as jobs_submitted,
+                   SUM(CASE WHEN j.actual_runtime_seconds IS NOT NULL
+                            THEN j.nodes * j.actual_runtime_seconds / 3600.0
+                            ELSE 0 END) as node_hours_used
+            FROM reservations r
+            LEFT JOIN jobs j ON j.queue = substr(r.reservation_id, 1, instr(r.reservation_id, '.') - 1)
+            WHERE r.reservation_id LIKE 'R%'
               AND (
-                end_time >= :cutoff
-                OR start_time >= :now
+                r.end_time >= :cutoff
+                OR r.start_time >= :now
               )
-            ORDER BY start_time DESC
+            GROUP BY r.reservation_id
+            ORDER BY r.start_time DESC
         """), {"cutoff": cutoff.replace(tzinfo=None), "now": now.replace(tzinfo=None)}).fetchall()
 
         import json as _json
@@ -863,9 +869,13 @@ def create_app(config=None) -> FastAPI:
             else:
                 display_state = r.state
 
-            node_hours = None
+            node_hours_reserved = None
+            utilization_pct = None
+            node_hours_used = round(r.node_hours_used, 1) if r.node_hours_used else 0.0
             if r.nodes and r.duration_seconds:
-                node_hours = round(r.nodes * r.duration_seconds / 3600, 1)
+                node_hours_reserved = round(r.nodes * r.duration_seconds / 3600, 1)
+                if node_hours_reserved > 0:
+                    utilization_pct = round(node_hours_used / node_hours_reserved * 100, 1)
 
             try:
                 auth_users  = _json.loads(r.authorized_users  or '[]')
@@ -877,20 +887,23 @@ def create_app(config=None) -> FastAPI:
             auth_users = [u.split('@')[0] for u in auth_users]
 
             result.append({
-                "reservation_id":   r.reservation_id,
-                "reservation_name": r.reservation_name or '',
-                "owner":            r.owner or '',
-                "state":            r.state,
-                "display_state":    display_state,
-                "nodes":            r.nodes,
-                "ncpus":            r.ncpus,
-                "ngpus":            r.ngpus,
-                "walltime":         r.walltime,
-                "node_hours":       node_hours,
-                "start_time":       r.start_time,
-                "end_time":         r.end_time,
-                "authorized_users":  auth_users,
-                "authorized_groups": auth_groups,
+                "reservation_id":      r.reservation_id,
+                "reservation_name":    r.reservation_name or '',
+                "owner":               r.owner or '',
+                "state":               r.state,
+                "display_state":       display_state,
+                "nodes":               r.nodes,
+                "ncpus":               r.ncpus,
+                "ngpus":               r.ngpus,
+                "walltime":            r.walltime,
+                "node_hours_reserved": node_hours_reserved,
+                "node_hours_used":     node_hours_used,
+                "utilization_pct":     utilization_pct,
+                "jobs_submitted":      r.jobs_submitted or 0,
+                "start_time":          r.start_time,
+                "end_time":            r.end_time,
+                "authorized_users":    auth_users,
+                "authorized_groups":   auth_groups,
             })
         return {"reservations": result}
 
