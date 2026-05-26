@@ -365,7 +365,7 @@
             </div>
 
             <!-- Details tab -->
-            <div v-show="chartTab === 'details'" class="chart-details-grid">
+            <div v-if="chartTab === 'details'" class="chart-details-grid">
                 <div class="chart-detail-cell">
                     <div class="chart-detail-label">Walltime Distribution</div>
                     <div class="chart-container-detail"><canvas ref="chartDetail1"></canvas></div>
