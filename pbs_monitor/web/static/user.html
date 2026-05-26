@@ -581,15 +581,30 @@ function nodeCountBucket(n) {
     return '>200';
 }
 
-const CHART_DEFAULTS = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { display: false } },
-    scales: {
-        x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } },
-        y: { ticks: { color: '#94a3b8', font: { size: 10 }, precision: 0 }, grid: { color: '#1e293b' } }
-    }
-};
+const AXIS_STYLE = { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } };
+function makeChartOpts(extra) {
+    return Object.assign({
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+            x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } },
+            y: { ticks: { color: '#94a3b8', font: { size: 10 }, precision: 0 }, grid: { color: '#1e293b' } }
+        }
+    }, extra || {});
+}
+function makeHBarOpts() {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        plugins: { legend: { display: false } },
+        scales: {
+            x: { ticks: { color: '#94a3b8', font: { size: 10 }, precision: 0 }, grid: { color: '#1e293b' } },
+            y: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } }
+        }
+    };
+}
 function destroyCharts(...instances) { instances.forEach(i => { if (i) i.destroy(); }); }
 
 // ── Vue app ───────────────────────────────────────────────────────────────────
@@ -673,7 +688,7 @@ createApp({
                     labels: summary.value.jobs_per_day.map(d => d.date),
                     datasets: [{ data: summary.value.jobs_per_day.map(d => d.count), backgroundColor: '#3b82f6', borderRadius: 3 }]
                 },
-                options: CHART_DEFAULTS,
+                options: makeChartOpts(),
             });
             if (!chartOverview2.value || !summary.value.node_hours_per_day) return;
             co2 = new Chart(chartOverview2.value, {
@@ -682,7 +697,7 @@ createApp({
                     labels: summary.value.node_hours_per_day.map(d => d.date),
                     datasets: [{ data: summary.value.node_hours_per_day.map(d => d.node_hours), backgroundColor: '#8b5cf6', borderRadius: 3 }]
                 },
-                options: CHART_DEFAULTS,
+                options: makeChartOpts(),
             });
         }
 
@@ -699,7 +714,7 @@ createApp({
                     labels: WALLTIME_BUCKETS,
                     datasets: [{ data: WALLTIME_BUCKETS.map(b => wtCounts[b]), backgroundColor: '#06b6d4', borderRadius: 3 }]
                 },
-                options: { ...CHART_DEFAULTS, indexAxis: 'y' },
+                options: makeHBarOpts(),
             });
 
             // Node count distribution
@@ -712,7 +727,7 @@ createApp({
                     labels: NODE_BUCKETS,
                     datasets: [{ data: NODE_BUCKETS.map(b => ndCounts[b]), backgroundColor: '#f59e0b', borderRadius: 3 }]
                 },
-                options: { ...CHART_DEFAULTS, indexAxis: 'y' },
+                options: makeHBarOpts(),
             });
 
             // Scatter: queue wait vs walltime
