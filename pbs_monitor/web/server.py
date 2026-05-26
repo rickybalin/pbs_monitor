@@ -674,8 +674,8 @@ def create_app(config=None) -> FastAPI:
         nh_by_day: dict[str, float] = {}
 
         for job in jobs:
-            # state counts
-            st = job.state.value if job.state else "UNKNOWN"
+            # state counts — use .name for human-readable key (HELD not H)
+            st = job.state.name if job.state else "UNKNOWN"
             state_counts[st] = state_counts.get(st, 0) + 1
 
             # node-hours: use actual runtime if available, else walltime
@@ -732,17 +732,21 @@ def create_app(config=None) -> FastAPI:
         wt_sec = _parse_walltime(job.walltime) or 0
         node_hours = round(nodes * (runtime_sec or wt_sec) / 3600.0, 2)
 
+        # Queue time: prefer stored value, then start-submit delta, then now-submit fallback
         queue_time = job.queue_time_seconds
         if queue_time is None and job.start_time and job.submit_time:
             st_t = job.start_time.replace(tzinfo=timezone.utc) if job.start_time.tzinfo is None else job.start_time
             su_t = job.submit_time.replace(tzinfo=timezone.utc) if job.submit_time.tzinfo is None else job.submit_time
             queue_time = int((st_t - su_t).total_seconds())
+        if queue_time is None and job.submit_time:
+            su_t = job.submit_time.replace(tzinfo=timezone.utc) if job.submit_time.tzinfo is None else job.submit_time
+            queue_time = int((now - su_t).total_seconds())
 
         return {
             "job_id": _short_job_id(job.job_id),
             "full_job_id": job.job_id,
             "name": job.job_name or "",
-            "state": job.state.value if job.state else "",
+            "state": job.state.name if job.state else "",  # .name = 'HELD', .value = 'H'
             "owner": job.owner or "",
             "project": job.project or "",
             "allocation_type": job.allocation_type or "",

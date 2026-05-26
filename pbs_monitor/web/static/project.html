@@ -25,6 +25,11 @@
             text-decoration: none;
             font-size: 0.875rem;
             white-space: nowrap;
+            cursor: pointer;
+            background: none;
+            border: none;
+            padding: 0;
+            font-family: inherit;
         }
         .ctx-back-link:hover { text-decoration: underline; }
         .ctx-title {
@@ -166,7 +171,7 @@
         .state-filter-btn.active { background: var(--accent-job-exclusive); border-color: var(--accent-job-exclusive); color: white; }
         .state-filter-btn:hover:not(.active) { border-color: #60a5fa; color: #60a5fa; }
 
-        .table-wrapper { overflow-x: auto; }
+        .table-wrapper { overflow-x: auto; overflow-y: auto; max-height: 480px; }
         .ctx-jobs-table {
             width: 100%;
             border-collapse: collapse;
@@ -183,6 +188,10 @@
             white-space: nowrap;
             cursor: pointer;
             user-select: none;
+            position: sticky;
+            top: 0;
+            background: var(--panel-bg);
+            z-index: 1;
         }
         .ctx-jobs-table thead th:hover { color: var(--text-color); }
         .ctx-jobs-table tbody tr {
@@ -220,7 +229,7 @@
 
     <!-- Header -->
     <div class="ctx-header">
-        <a href="/" target="_blank" class="ctx-back-link">← PBS Monitor Dashboard</a>
+        <button onclick="window.close()" class="ctx-back-link">← Close Tab</button>
         <div>
             <div class="ctx-title">Project: {{ entityName }}</div>
         </div>
