@@ -580,20 +580,21 @@ createApp({
         function selectJob(jid)     { selectedJobId.value = (selectedJobId.value === jid) ? null : jid; requestAnimationFrame(drawMap); }
 
         async function openJobDetail(jid) {
-            // Also highlight the job on the node map
+            // Highlight on node map
             selectedJobId.value = jid;
             requestAnimationFrame(drawMap);
 
+            // Show modal immediately with a loading stub
             jobDetailLoading.value = true;
-            jobDetail.value = null;
+            jobDetail.value = { job_id: jid, _loading: true };
+
             try {
                 const res = await fetch(`/api/jobs/${encodeURIComponent(jid)}`);
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 jobDetail.value = await res.json();
             } catch (e) {
                 console.error('Job detail fetch failed:', e);
-                // Show a minimal stub so the modal still opens
-                jobDetail.value = { job_id: jid, error: e.message };
+                jobDetail.value = { job_id: jid, _error: e.message };
             } finally {
                 jobDetailLoading.value = false;
             }

@@ -461,6 +461,32 @@ canvas {
 .c-que { color: var(--accent-busy); font-weight: bold; }
 .c-hel { color: #f97316; font-weight: bold; }
 
+/* ─── Modal loading / error states ────────────────────────────────── */
+
+.modal-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 2.5rem 1rem;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+}
+
+.modal-loading .spinner {
+    width: 24px;
+    height: 24px;
+    border-width: 3px;
+    margin: 0;
+}
+
+.modal-error {
+    padding: 1.5rem;
+    color: var(--accent-down);
+    font-size: 0.875rem;
+    text-align: center;
+}
+
 /* ─── Job Detail Modal ──────────────────────────────────────────────────── */
 
 .modal-backdrop {

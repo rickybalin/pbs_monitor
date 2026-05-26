@@ -243,6 +243,20 @@
             </div>
 
             <div class="modal-body">
+                <!-- Loading state -->
+                <div v-if="jobDetail._loading" class="modal-loading">
+                    <div class="spinner"></div>
+                    <span>Loading job details…</span>
+                </div>
+
+                <!-- Error state -->
+                <div v-else-if="jobDetail._error" class="modal-error">
+                    ⚠ Failed to load job details: {{ jobDetail._error }}
+                </div>
+
+                <!-- Full detail sections -->
+                <template v-else>
+
                 <!-- Ownership -->
                 <div class="modal-section">
                     <h3 class="modal-section-title">Ownership</h3>
@@ -328,12 +342,14 @@
                         <span class="mf-value">{{ jobDetail.comment }}</span>
                     </div>
                 </div>
+
+                </template><!-- end v-else full detail -->
             </div>
         </div>
     </div>
 
 </div>
 
-<script src="js/app.js?v=8"></script>
+<script src="js/app.js?v=9"></script>
 </body>
 </html>
