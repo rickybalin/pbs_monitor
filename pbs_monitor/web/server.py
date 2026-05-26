@@ -6,13 +6,13 @@ for system info, node state snapshots, running jobs, and queue status.
 Reads from the same SQLite database the PBS Monitor daemon writes to.
 """
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import sessionmaker, Session
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 import re
@@ -627,6 +627,198 @@ def create_app(config=None) -> FastAPI:
             "array_index": raw.get("array_index"),
             "job_array_id": raw.get("array_id"),
         }
+
+    # ---- context page routes (must be before static mounts) ----
+
+    @app.get("/page/user/{username}")
+    async def serve_user_page(username: str):
+        return FileResponse(STATIC_DIR / "user.html")
+
+    @app.get("/page/project/{project}")
+    async def serve_project_page(project: str):
+        return FileResponse(STATIC_DIR / "project.html")
+
+    # ---- user/project API endpoints ----
+
+    def _date_range(range_days: int) -> datetime:
+        """Return UTC datetime for range_days ago."""
+        return datetime.now(timezone.utc) - timedelta(days=range_days)
+
+    def _fill_date_series(counts: dict, start: datetime, range_days: int) -> list[dict]:
+        """Fill a date→count/value dict with zeros for missing days."""
+        result = []
+        for i in range(range_days):
+            d = (start + timedelta(days=i)).strftime("%Y-%m-%d")
+            result.append({"date": d, "count": counts.get(d, 0)})
+        return result
+
+    def _fill_nh_series(counts: dict, start: datetime, range_days: int) -> list[dict]:
+        result = []
+        for i in range(range_days):
+            d = (start + timedelta(days=i)).strftime("%Y-%m-%d")
+            result.append({"date": d, "node_hours": round(counts.get(d, 0.0), 2)})
+        return result
+
+    def _build_summary(jobs: list, name: str, kind: str, range_days: int) -> dict:
+        """Build summary stats from a list of Job ORM objects."""
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=range_days)
+
+        state_counts: dict[str, int] = {}
+        total_node_hours = 0.0
+        runtime_sum = 0
+        runtime_count = 0
+        queue_sum = 0
+        queue_count = 0
+        jobs_by_day: dict[str, int] = {}
+        nh_by_day: dict[str, float] = {}
+
+        for job in jobs:
+            # state counts
+            st = job.state.value if job.state else "UNKNOWN"
+            state_counts[st] = state_counts.get(st, 0) + 1
+
+            # node-hours: use actual runtime if available, else walltime
+            nodes = job.nodes or 1
+            runtime_sec = job.actual_runtime_seconds
+            if not runtime_sec and job.start_time and job.end_time:
+                st_t = job.start_time.replace(tzinfo=timezone.utc) if job.start_time.tzinfo is None else job.start_time
+                et_t = job.end_time.replace(tzinfo=timezone.utc) if job.end_time.tzinfo is None else job.end_time
+                runtime_sec = int((et_t - st_t).total_seconds())
+            if not runtime_sec:
+                wt_sec = _parse_walltime(job.walltime) or 0
+                runtime_sec = wt_sec
+            nh = nodes * runtime_sec / 3600.0
+            total_node_hours += nh
+
+            # runtime stats (only jobs with actual runtime)
+            if job.actual_runtime_seconds:
+                runtime_sum += job.actual_runtime_seconds
+                runtime_count += 1
+
+            # queue time stats
+            if job.queue_time_seconds:
+                queue_sum += job.queue_time_seconds
+                queue_count += 1
+
+            # per-day buckets — group by submit_time date
+            if job.submit_time:
+                su = job.submit_time.replace(tzinfo=timezone.utc) if job.submit_time.tzinfo is None else job.submit_time
+                d = su.strftime("%Y-%m-%d")
+                jobs_by_day[d] = jobs_by_day.get(d, 0) + 1
+                nh_by_day[d] = nh_by_day.get(d, 0.0) + nh
+
+        return {
+            "name": name,
+            "kind": kind,
+            "range_days": range_days,
+            "total_jobs": len(jobs),
+            "total_node_hours": round(total_node_hours, 1),
+            "avg_queue_time_seconds": int(queue_sum / queue_count) if queue_count else None,
+            "avg_runtime_seconds": int(runtime_sum / runtime_count) if runtime_count else None,
+            "state_counts": state_counts,
+            "jobs_per_day": _fill_date_series(jobs_by_day, start, range_days),
+            "node_hours_per_day": _fill_nh_series(nh_by_day, start, range_days),
+        }
+
+    def _serialize_job(job, now: datetime) -> dict:
+        """Serialize a Job ORM object to a dict for context page job lists."""
+        nodes = job.nodes or 1
+        runtime_sec = job.actual_runtime_seconds
+        if not runtime_sec and job.start_time and job.end_time:
+            st_t = job.start_time.replace(tzinfo=timezone.utc) if job.start_time.tzinfo is None else job.start_time
+            et_t = job.end_time.replace(tzinfo=timezone.utc) if job.end_time.tzinfo is None else job.end_time
+            runtime_sec = int((et_t - st_t).total_seconds())
+        wt_sec = _parse_walltime(job.walltime) or 0
+        node_hours = round(nodes * (runtime_sec or wt_sec) / 3600.0, 2)
+
+        queue_time = job.queue_time_seconds
+        if queue_time is None and job.start_time and job.submit_time:
+            st_t = job.start_time.replace(tzinfo=timezone.utc) if job.start_time.tzinfo is None else job.start_time
+            su_t = job.submit_time.replace(tzinfo=timezone.utc) if job.submit_time.tzinfo is None else job.submit_time
+            queue_time = int((st_t - su_t).total_seconds())
+
+        return {
+            "job_id": _short_job_id(job.job_id),
+            "full_job_id": job.job_id,
+            "name": job.job_name or "",
+            "state": job.state.value if job.state else "",
+            "owner": job.owner or "",
+            "project": job.project or "",
+            "allocation_type": job.allocation_type or "",
+            "queue": job.queue or "",
+            "nodes": nodes,
+            "walltime": job.walltime or "",
+            "submit_time": job.submit_time.isoformat() if job.submit_time else None,
+            "start_time": job.start_time.isoformat() if job.start_time else None,
+            "end_time": job.end_time.isoformat() if job.end_time else None,
+            "actual_runtime_seconds": runtime_sec,
+            "queue_time_seconds": queue_time or 0,
+            "node_hours": node_hours,
+            "score": _extract_job_score(job, _get_job_formula()),
+        }
+
+    def _query_jobs(db: Session, filter_col, filter_val: str, range_days: int, state_filter: str):
+        """Shared job query for user/project endpoints."""
+        since = _date_range(range_days)
+        q = db.query(Job).filter(filter_col == filter_val).filter(Job.submit_time >= since)
+        if state_filter and state_filter.upper() != "ALL":
+            # Map frontend state string to JobState enum value
+            state_map = {
+                "RUNNING": JobState.RUNNING,
+                "QUEUED": JobState.QUEUED,
+                "FINISHED": JobState.FINISHED,
+                "HELD": JobState.HELD,
+                "UNKNOWN_END": JobState.UNKNOWN_END,
+            }
+            js = state_map.get(state_filter.upper())
+            if js:
+                q = q.filter(Job.state == js)
+        return q.order_by(Job.submit_time.desc()).all()
+
+    @app.get("/api/user/{username}/summary")
+    def api_user_summary(
+        username: str,
+        range: int = Query(7, ge=1, le=90),
+        db: Session = Depends(get_db),
+    ):
+        jobs = db.query(Job).filter(Job.owner == username).filter(
+            Job.submit_time >= _date_range(range)
+        ).all()
+        return _build_summary(jobs, username, "user", range)
+
+    @app.get("/api/user/{username}/jobs")
+    def api_user_jobs(
+        username: str,
+        range: int = Query(7, ge=1, le=90),
+        state: str = Query("ALL"),
+        db: Session = Depends(get_db),
+    ):
+        now = datetime.now(timezone.utc)
+        jobs = _query_jobs(db, Job.owner, username, range, state)
+        return {"total": len(jobs), "jobs": [_serialize_job(j, now) for j in jobs]}
+
+    @app.get("/api/project/{project}/summary")
+    def api_project_summary(
+        project: str,
+        range: int = Query(7, ge=1, le=90),
+        db: Session = Depends(get_db),
+    ):
+        jobs = db.query(Job).filter(Job.project == project).filter(
+            Job.submit_time >= _date_range(range)
+        ).all()
+        return _build_summary(jobs, project, "project", range)
+
+    @app.get("/api/project/{project}/jobs")
+    def api_project_jobs(
+        project: str,
+        range: int = Query(7, ge=1, le=90),
+        state: str = Query("ALL"),
+        db: Session = Depends(get_db),
+    ):
+        now = datetime.now(timezone.utc)
+        jobs = _query_jobs(db, Job.project, project, range, state)
+        return {"total": len(jobs), "jobs": [_serialize_job(j, now) for j in jobs]}
 
     # ---- static files ----
     # Serve index.html at root, everything else from /static

@@ -744,3 +744,12 @@ canvas {
     border-radius: 4px;
     cursor: pointer;
 }
+
+/* Context drill-down links (owner/project in job tables) */
+.context-link {
+    color: #60a5fa;
+    text-decoration: none;
+}
+.context-link:hover {
+    text-decoration: underline;
+}

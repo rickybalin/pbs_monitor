@@ -136,8 +136,8 @@
                                 style="cursor:pointer">
                                 <td class="score-cell">{{ fmtScore(job.score) }}</td>
                                 <td>{{ job.job_id }}</td>
-                                <td>{{ job.owner }}</td>
-                                <td>{{ job.project }}</td>
+                                <td><a :href="'/page/user/' + job.owner" target="_blank" class="context-link" @click.stop>{{ job.owner }}</a></td>
+                                <td><a :href="'/page/project/' + job.project" target="_blank" class="context-link" @click.stop>{{ job.project }}</a></td>
                                 <td>{{ job.allocation_type }}</td>
                                 <td><span class="queue-badge" :style="{ backgroundColor: queueColor(job.queue) }">{{ job.queue }}</span></td>
                                 <td>{{ job.nodes }}</td>
@@ -172,8 +172,8 @@
                                 style="cursor:pointer">
                                 <td class="score-cell">{{ fmtScore(job.score) }}</td>
                                 <td>{{ job.job_id }}</td>
-                                <td>{{ job.owner }}</td>
-                                <td>{{ job.project }}</td>
+                                <td><a :href="'/page/user/' + job.owner" target="_blank" class="context-link" @click.stop>{{ job.owner }}</a></td>
+                                <td><a :href="'/page/project/' + job.project" target="_blank" class="context-link" @click.stop>{{ job.project }}</a></td>
                                 <td>{{ job.allocation_type }}</td>
                                 <td><span class="queue-badge" :style="{ backgroundColor: queueColor(job.queue) }">{{ job.queue }}</span></td>
                                 <td>{{ job.nodes }}</td>
