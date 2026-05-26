@@ -104,6 +104,13 @@ createApp({
         const depthGroupBy   = ref('queue');   // 'queue' | 'allocation' | 'project'
         const depthShowHeld  = ref(false);
 
+        // ── reservations ──
+        const reservations  = ref([]);
+        const resvLoading   = ref(false);
+        const resvOpen      = ref(true);
+        const resvSortKey   = ref('start_time');
+        const resvSortDesc  = ref(true);
+
         const nodeCanvas   = ref(null);
         const mapContainer = ref(null);
         const tooltip = reactive({ visible: false, x: 0, y: 0, nodeName: '', state: '', jobId: '', owner: '', project: '', queue: '' });
@@ -635,8 +642,40 @@ createApp({
             nextTick(() => { computeLayout(); requestAnimationFrame(drawMap); });
         });
 
+                // ── reservations fetch + sort ──
+        async function fetchReservations() {
+            resvLoading.value = true;
+            try {
+                const res = await fetch('/api/reservations');
+                if (res.ok) reservations.value = (await res.json()).reservations || [];
+            } finally {
+                resvLoading.value = false;
+            }
+        }
+
+        const sortedReservations = computed(() => {
+            const list = [...reservations.value];
+            return list.sort((a, b) => {
+                let va = a[resvSortKey.value] ?? '', vb = b[resvSortKey.value] ?? '';
+                if (typeof va === 'string') { va = va.toLowerCase(); vb = vb.toLowerCase(); }
+                if (va < vb) return resvSortDesc.value ? 1 : -1;
+                if (va > vb) return resvSortDesc.value ? -1 : 1;
+                return 0;
+            });
+        });
+
+        function resvSortBy(key) {
+            if (resvSortKey.value === key) resvSortDesc.value = !resvSortDesc.value;
+            else { resvSortKey.value = key; resvSortDesc.value = true; }
+        }
+        function resvSortArrow(key) {
+            if (resvSortKey.value !== key) return '';
+            return resvSortDesc.value ? ' ▼' : ' ▲';
+        }
+
         onMounted(async () => {
             await fetchData();
+            fetchReservations();
             pollTimer = setInterval(fetchData, 30000);
             window.addEventListener('resize', onResize);
             window.addEventListener('keydown', onKeyDown);
@@ -660,6 +699,7 @@ createApp({
             openJobDetail, closeJobDetail,
             onCanvasMove, onCanvasLeave, onCanvasClick,
             fmtDuration, fmtScore, fmtSysHours, fmtIso, queueColor,
+            reservations, resvLoading, resvOpen, sortedReservations, resvSortBy, resvSortArrow,
         };
     }
 }).mount('#app');

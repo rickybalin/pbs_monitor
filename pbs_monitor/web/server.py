@@ -824,6 +824,76 @@ def create_app(config=None) -> FastAPI:
         jobs = _query_jobs(db, Job.project, project, range, state)
         return {"total": len(jobs), "jobs": [_serialize_job(j, now) for j in jobs]}
 
+    # ---- reservations endpoint ----
+    @app.get("/api/reservations")
+    async def get_reservations(db: Session = Depends(get_db)):
+        from sqlalchemy import text
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=14)
+        rows = db.execute(text("""
+            SELECT reservation_id, reservation_name, owner, state,
+                   nodes, ncpus, ngpus, walltime,
+                   start_time, end_time, duration_seconds,
+                   authorized_users, authorized_groups
+            FROM reservations
+            WHERE reservation_id LIKE 'R%'
+              AND (
+                end_time >= :cutoff
+                OR start_time >= :now
+              )
+            ORDER BY start_time DESC
+        """), {"cutoff": cutoff.replace(tzinfo=None), "now": now.replace(tzinfo=None)}).fetchall()
+
+        import json as _json
+        result = []
+        for r in rows:
+            start = datetime.fromisoformat(r.start_time) if r.start_time else None
+            end   = datetime.fromisoformat(r.end_time)   if r.end_time   else None
+            # Determine live state relative to now
+            now_naive = now.replace(tzinfo=None)
+            if r.state not in ('COMPLETED', 'CANCELLED', 'DELETED'):
+                display_state = r.state
+            elif start and end:
+                if now_naive < start:
+                    display_state = 'UPCOMING'
+                elif now_naive <= end:
+                    display_state = 'ACTIVE'
+                else:
+                    display_state = r.state
+            else:
+                display_state = r.state
+
+            node_hours = None
+            if r.nodes and r.duration_seconds:
+                node_hours = round(r.nodes * r.duration_seconds / 3600, 1)
+
+            try:
+                auth_users  = _json.loads(r.authorized_users  or '[]')
+                auth_groups = _json.loads(r.authorized_groups or '[]')
+            except Exception:
+                auth_users, auth_groups = [], []
+
+            # Strip hostname suffixes from users
+            auth_users = [u.split('@')[0] for u in auth_users]
+
+            result.append({
+                "reservation_id":   r.reservation_id,
+                "reservation_name": r.reservation_name or '',
+                "owner":            r.owner or '',
+                "state":            r.state,
+                "display_state":    display_state,
+                "nodes":            r.nodes,
+                "ncpus":            r.ncpus,
+                "ngpus":            r.ngpus,
+                "walltime":         r.walltime,
+                "node_hours":       node_hours,
+                "start_time":       r.start_time,
+                "end_time":         r.end_time,
+                "authorized_users":  auth_users,
+                "authorized_groups": auth_groups,
+            })
+        return {"reservations": result}
+
     # ---- static files ----
     # Serve index.html at root, everything else from /static
     @app.get("/")

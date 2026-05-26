@@ -753,3 +753,101 @@ canvas {
 .context-link:hover {
     text-decoration: underline;
 }
+
+/* ── Reservations panel ─────────────────────────────────────────────────── */
+.reservations-panel {
+    margin: 0 1.5rem 1.5rem;
+    background: var(--panel-bg);
+    border: 1px solid var(--accent-border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+.reservations-panel .panel-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid var(--accent-border);
+    cursor: pointer;
+    user-select: none;
+}
+.reservations-panel .panel-header:hover { background: #1a2235; }
+.reservations-panel .panel-header h2 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 0;
+    flex: 1;
+}
+.resv-collapse-icon {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    transition: transform 0.2s;
+}
+.resv-collapse-icon.open { transform: rotate(180deg); }
+.resv-count-badge {
+    font-size: 0.72rem;
+    background: #1e293b;
+    border: 1px solid var(--accent-border);
+    border-radius: 10px;
+    padding: 0.1rem 0.5rem;
+    color: var(--text-dim);
+}
+.reservations-table-wrap {
+    max-height: 400px;
+    overflow-y: auto;
+}
+.reservations-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+.reservations-table thead th {
+    position: sticky;
+    top: 0;
+    background: #0d1627;
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    color: var(--text-dim);
+    font-weight: 600;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--accent-border);
+    white-space: nowrap;
+    cursor: pointer;
+}
+.reservations-table thead th:hover { color: #e2e8f0; }
+.reservations-table tbody tr {
+    border-bottom: 1px solid #1a2235;
+    transition: background 0.1s;
+}
+.reservations-table tbody tr:hover { background: #1a2235; }
+.reservations-table td {
+    padding: 0.45rem 0.75rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+.resv-name { font-weight: 600; color: #e2e8f0; }
+.resv-groups { color: #94a3b8; font-size: 0.75rem; }
+.resv-state-badge {
+    display: inline-block;
+    padding: 0.1rem 0.45rem;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+}
+.resv-state-ACTIVE    { background: #065f46; color: #6ee7b7; }
+.resv-state-UPCOMING  { background: #1e3a5f; color: #93c5fd; }
+.resv-state-COMPLETED { background: #1e293b; color: #64748b; }
+.resv-state-CANCELLED { background: #2d1b1b; color: #9c6060; }
+.resv-empty {
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    font-style: italic;
+}

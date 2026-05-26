@@ -230,6 +230,46 @@
         </footer>
     </div>
 
+    <!-- ─── Reservations ─────────────────────────────────────────────────── -->
+    <div class="reservations-panel">
+        <div class="panel-header" @click="resvOpen = !resvOpen">
+            <h2>Reservations <span class="resv-count-badge" v-if="reservations.length">{{ reservations.length }}</span></h2>
+            <span class="resv-collapse-icon" :class="{ open: resvOpen }">▼</span>
+        </div>
+        <div v-if="resvOpen">
+            <div v-if="resvLoading" class="resv-empty">Loading…</div>
+            <div v-else-if="reservations.length === 0" class="resv-empty">No reservations in the last 14 days or upcoming.</div>
+            <div v-else class="reservations-table-wrap">
+                <table class="reservations-table">
+                    <thead>
+                        <tr>
+                            <th @click="resvSortBy('reservation_name')">Name {{ resvSortArrow('reservation_name') }}</th>
+                            <th @click="resvSortBy('owner')">Owner {{ resvSortArrow('owner') }}</th>
+                            <th @click="resvSortBy('display_state')">State {{ resvSortArrow('display_state') }}</th>
+                            <th @click="resvSortBy('nodes')">Nodes {{ resvSortArrow('nodes') }}</th>
+                            <th @click="resvSortBy('node_hours')">Node-Hours {{ resvSortArrow('node_hours') }}</th>
+                            <th @click="resvSortBy('start_time')">Start {{ resvSortArrow('start_time') }}</th>
+                            <th @click="resvSortBy('end_time')">End {{ resvSortArrow('end_time') }}</th>
+                            <th>Groups / Users</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="r in sortedReservations" :key="r.reservation_id">
+                            <td class="resv-name">{{ r.reservation_name || r.reservation_id }}</td>
+                            <td>{{ r.owner }}</td>
+                            <td><span class="resv-state-badge" :class="'resv-state-' + r.display_state">{{ r.display_state }}</span></td>
+                            <td>{{ r.nodes ?? '—' }}</td>
+                            <td>{{ r.node_hours != null ? r.node_hours.toLocaleString() : '—' }}</td>
+                            <td>{{ fmtIso(r.start_time) }}</td>
+                            <td>{{ fmtIso(r.end_time) }}</td>
+                            <td class="resv-groups">{{ [...(r.authorized_groups||[]), ...(r.authorized_users||[])].join(', ') || '—' }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <!-- ─── Job Detail Modal (fixed overlay, outside layout flow) ────────── -->
     <div v-if="jobDetail" class="modal-backdrop" @click.self="closeJobDetail">
         <div class="modal-panel" role="dialog" aria-modal="true">
@@ -350,6 +390,6 @@
 
 </div>
 
-<script src="js/app.js?v=9"></script>
+<script src="js/app.js?v=10"></script>
 </body>
 </html>
