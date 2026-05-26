@@ -741,17 +741,21 @@ createApp({
             });
         }
 
-        async function switchChartTab(tab) {
+        function switchChartTab(tab) {
             chartTab.value = tab;
-            await nextTick();
-            if (tab === 'overview') buildOverviewCharts();
-            else buildDetailCharts();
+            afterPaint(() => {
+                if (tab === 'overview') buildOverviewCharts();
+                else buildDetailCharts();
+            });
         }
 
-        watch([() => summary.value.jobs_per_day, jobs], async () => {
-            await nextTick();
-            if (chartTab.value === 'overview') buildOverviewCharts();
-            else buildDetailCharts();
+        function afterPaint(fn) { nextTick(() => requestAnimationFrame(fn)); }
+
+        watch([() => summary.value.jobs_per_day, jobs], () => {
+            afterPaint(() => {
+                if (chartTab.value === 'overview') buildOverviewCharts();
+                else buildDetailCharts();
+            });
         });
 
         // ── job detail modal ──
