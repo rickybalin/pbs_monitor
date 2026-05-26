@@ -97,6 +97,8 @@ createApp({
         const queuedSortDesc = ref(true);
         const selectedJobId  = ref(null);
         const hoveredJobId   = ref(null);
+        const jobDetail      = ref(null);   // detailed job data for modal
+        const jobDetailLoading = ref(false);
         const hoveredLegend  = ref(null);  // 'free'|'job'|'resv'|'down'|'offline'|null
         const filterText    = ref('');
         const depthGroupBy   = ref('queue');   // 'queue' | 'allocation' | 'project'
@@ -576,6 +578,46 @@ createApp({
         function highlightJob(jid) { hoveredJobId.value = jid; requestAnimationFrame(drawMap); }
         function clearHighlight()   { hoveredJobId.value = null; requestAnimationFrame(drawMap); }
         function selectJob(jid)     { selectedJobId.value = (selectedJobId.value === jid) ? null : jid; requestAnimationFrame(drawMap); }
+
+        async function openJobDetail(jid) {
+            // Also highlight the job on the node map
+            selectedJobId.value = jid;
+            requestAnimationFrame(drawMap);
+
+            jobDetailLoading.value = true;
+            jobDetail.value = null;
+            try {
+                const res = await fetch(`/api/jobs/${encodeURIComponent(jid)}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                jobDetail.value = await res.json();
+            } catch (e) {
+                console.error('Job detail fetch failed:', e);
+                // Show a minimal stub so the modal still opens
+                jobDetail.value = { job_id: jid, error: e.message };
+            } finally {
+                jobDetailLoading.value = false;
+            }
+        }
+
+        function closeJobDetail() {
+            jobDetail.value = null;
+        }
+
+        function fmtIso(isoStr) {
+            if (!isoStr) return '—';
+            const d = new Date(isoStr);
+            if (isNaN(d)) return isoStr;
+            return d.toLocaleString(undefined, {
+                year: 'numeric', month: 'short', day: 'numeric',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                hour12: false,
+            });
+        }
+
+        // Close modal on Escape key
+        function onKeyDown(e) {
+            if (e.key === 'Escape' && jobDetail.value) closeJobDetail();
+        }
         function hoverLegend(key)   { hoveredLegend.value = key; requestAnimationFrame(drawMap); }
         function clearLegend()      { hoveredLegend.value = null; requestAnimationFrame(drawMap); }
         function isOverdue(job)     { return job.remaining_seconds <= 0 && job.elapsed_seconds > 0; }
@@ -596,11 +638,13 @@ createApp({
             await fetchData();
             pollTimer = setInterval(fetchData, 30000);
             window.addEventListener('resize', onResize);
+            window.addEventListener('keydown', onKeyDown);
         });
 
         onUnmounted(() => {
             if (pollTimer) clearInterval(pollTimer);
             window.removeEventListener('resize', onResize);
+            window.removeEventListener('keydown', onKeyDown);
         });
 
         return {
@@ -608,11 +652,13 @@ createApp({
             activeTab, sortKey, sortDesc, queuedSortKey, queuedSortDesc, selectedJobId, hoveredJobId, filterText,
             depthGroupBy, depthShowHeld,
             nodeCanvas, mapContainer, tooltip, tooltipStyle,
+            jobDetail, jobDetailLoading,
             systemName, utilization, busyNodes, totalComputeNodes, stateCounts, jobCounts, freshnessClass, timeSinceLastUpdate,
             sortedRunningJobs, sortedQueuedJobs, filteredRunningJobs, filteredQueuedJobs, sortedDepthBuckets,
             fetchData, sortJobs, sortQueuedJobs, selectJob, highlightJob, clearHighlight, hoverLegend, clearLegend, isOverdue,
+            openJobDetail, closeJobDetail,
             onCanvasMove, onCanvasLeave, onCanvasClick,
-            fmtDuration, fmtScore, fmtSysHours, queueColor,
+            fmtDuration, fmtScore, fmtSysHours, fmtIso, queueColor,
         };
     }
 }).mount('#app');

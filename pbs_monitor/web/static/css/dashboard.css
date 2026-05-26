@@ -461,6 +461,227 @@ canvas {
 .c-que { color: var(--accent-busy); font-weight: bold; }
 .c-hel { color: #f97316; font-weight: bold; }
 
+/* ─── Job Detail Modal ──────────────────────────────────────────────────── */
+
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    z-index: 500;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 2rem 1rem;
+    overflow-y: auto;
+    backdrop-filter: blur(2px);
+}
+
+.modal-panel {
+    background: #1e2a3a;
+    border: 1px solid var(--accent-border);
+    border-radius: 10px;
+    width: 100%;
+    max-width: 780px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    animation: modal-in 0.15s ease-out;
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 4rem);
+}
+
+@keyframes modal-in {
+    from { opacity: 0; transform: translateY(-16px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.25rem 0.75rem;
+    border-bottom: 1px solid var(--accent-border);
+    gap: 0.75rem;
+    flex-shrink: 0;
+}
+
+.modal-title-group {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.modal-job-id {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #fff;
+    white-space: nowrap;
+}
+
+.modal-job-name {
+    font-size: 0.9rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 360px;
+}
+
+.modal-state-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    flex-shrink: 0;
+}
+
+.modal-state-badge.state-R { background: rgba(59,130,246,0.25); color: #60a5fa; border: 1px solid #3b82f6; }
+.modal-state-badge.state-Q { background: rgba(245,158,11,0.2);  color: #fbbf24; border: 1px solid #f59e0b; }
+.modal-state-badge.state-H { background: rgba(249,115,22,0.2);  color: #fb923c; border: 1px solid #f97316; }
+.modal-state-badge.state-C,
+.modal-state-badge.state-F { background: rgba(74,222,128,0.15); color: #4ade80; border: 1px solid #22c55e; }
+.modal-state-badge.state-E { background: rgba(239,68,68,0.2);   color: #f87171; border: 1px solid #ef4444; }
+
+.modal-close {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 1.25rem;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: color 0.15s, background 0.15s;
+}
+
+.modal-close:hover {
+    color: #fff;
+    background: rgba(255,255,255,0.1);
+}
+
+.modal-body {
+    overflow-y: auto;
+    padding: 0 1.25rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.modal-section {
+    padding-top: 1rem;
+    border-top: 1px solid var(--accent-border);
+}
+
+.modal-section:first-child { border-top: none; padding-top: 0.75rem; }
+
+.modal-section-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin-bottom: 0.6rem;
+}
+
+.modal-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 0.5rem 1.25rem;
+}
+
+.modal-field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.modal-field-wide {
+    margin-top: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.mf-label {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.mf-value {
+    font-size: 0.88rem;
+    color: var(--text-color);
+    word-break: break-all;
+}
+
+.mf-value.mono {
+    font-family: monospace;
+    font-size: 0.8rem;
+}
+
+.mf-value.small {
+    font-size: 0.75rem;
+}
+
+/* Walltime progress */
+.modal-progress-container {
+    margin-top: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.modal-progress-bar {
+    flex: 1;
+    height: 8px;
+    background: #0f172a;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.modal-progress-fill {
+    height: 100%;
+    background: var(--accent-job-exclusive);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+.modal-progress-fill.overdue {
+    background: var(--accent-down);
+}
+
+.modal-progress-label {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
+/* Execution nodes list */
+.modal-nodes-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    max-height: 160px;
+    overflow-y: auto;
+}
+
+.modal-node-tag {
+    font-family: monospace;
+    font-size: 0.72rem;
+    background: #0f172a;
+    border: 1px solid #2d3748;
+    border-radius: 3px;
+    padding: 1px 6px;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
 /* Overlays */
 .loading-overlay, .error-overlay {
     position: fixed;

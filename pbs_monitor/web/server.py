@@ -542,22 +542,90 @@ def create_app(config=None) -> FastAPI:
             job = db.query(Job).filter(Job.job_id.like(f"{job_id}.%")).first()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
+
+        # Compute elapsed / remaining for running jobs
+        now = datetime.now(timezone.utc)
+        elapsed_seconds = None
+        remaining_seconds = None
+        wall_secs = _parse_walltime(job.walltime)
+        if job.start_time and job.state and job.state.value == "R":
+            start_utc = job.start_time
+            if start_utc.tzinfo is None:
+                start_utc = start_utc.replace(tzinfo=timezone.utc)
+            elapsed_seconds = int((now - start_utc).total_seconds())
+            if wall_secs is not None:
+                remaining_seconds = max(0, wall_secs - elapsed_seconds)
+
+        # Extract useful fields from raw PBS data
+        raw = {}
+        if job.raw_pbs_data:
+            try:
+                raw = _json.loads(job.raw_pbs_data) if isinstance(job.raw_pbs_data, str) else (job.raw_pbs_data or {})
+            except (ValueError, TypeError):
+                raw = {}
+
+        rl = raw.get("Resource_List", {})
+        resources_used = raw.get("resources_used", {})
+
+        # Parse node list into something readable
+        exec_names = _parse_execution_nodes(job.execution_node)
+        unique_nodes = list(dict.fromkeys(exec_names))  # deduplicated, order preserved
+
         return {
-            "job_id": job.job_id,
+            # Identity
+            "job_id": _short_job_id(job.job_id),
+            "full_job_id": job.job_id,
             "job_name": job.job_name,
+            "state": job.state.value if job.state else None,
+
+            # Ownership
             "owner": job.owner,
             "project": job.project,
-            "state": job.state.value if job.state else None,
+            "allocation_type": job.allocation_type,
             "queue": job.queue,
+
+            # Resources requested
             "nodes": job.nodes,
+            "total_cores": job.total_cores,
             "walltime": job.walltime,
+            "memory_requested": rl.get("mem") or rl.get("pmem"),
+            "ncpus_requested": rl.get("ncpus"),
+            "mpiprocs": rl.get("mpiprocs"),
+            "ompthreads": rl.get("ompthreads"),
+            "select": rl.get("select"),
+            "place": rl.get("place"),
+
+            # Resources used (populated when job completes or is running)
+            "cpu_used": resources_used.get("cpupercent"),
+            "mem_used": resources_used.get("mem"),
+            "vmem_used": resources_used.get("vmem"),
+            "walltime_used": resources_used.get("walltime"),
+            "ncpus_used": resources_used.get("ncpus"),
+
+            # Timing
             "submit_time": job.submit_time.isoformat() if job.submit_time else None,
             "start_time": job.start_time.isoformat() if job.start_time else None,
             "end_time": job.end_time.isoformat() if job.end_time else None,
-            "execution_node": job.execution_node,
-            "total_cores": job.total_cores,
+            "elapsed_seconds": elapsed_seconds,
+            "remaining_seconds": remaining_seconds,
+            "walltime_seconds": wall_secs,
             "actual_runtime_seconds": job.actual_runtime_seconds,
             "queue_time_seconds": job.queue_time_seconds,
+
+            # Placement
+            "execution_nodes": unique_nodes,
+            "execution_node_count": len(unique_nodes),
+
+            # Score
+            "score": _extract_job_score(job, _get_job_formula()),
+
+            # PBS internals (useful for debugging / power users)
+            "priority": raw.get("Priority"),
+            "eligible_time": raw.get("eligible_time"),
+            "comment": raw.get("comment"),
+            "exit_status": raw.get("Exit_status"),
+            "array_index": raw.get("array_index"),
+            "job_array_id": raw.get("array_id"),
         }
 
     # ---- static files ----
