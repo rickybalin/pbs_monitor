@@ -127,22 +127,78 @@
         .state-HELD       { background: #451a03; color: #fbbf24; }
         .state-UNKNOWN_END { background: #450a0a; color: #f87171; }
 
-        /* Chart panel */
-        .chart-panel {
-            background: var(--panel-bg);
-            border: 1px solid var(--accent-border);
-            border-radius: 8px;
-            padding: 1rem 1.25rem;
-        }
-        .chart-panel h2 {
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: var(--text-dim);
-            margin-bottom: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-        .chart-container { position: relative; height: 180px; }
+/* Chart tabs */
+.chart-tab-bar {
+    display: flex;
+    gap: 0.375rem;
+    margin-bottom: 1rem;
+}
+.chart-tab-btn {
+    padding: 0.25rem 0.75rem;
+    border: 1px solid var(--accent-border);
+    background: transparent;
+    color: var(--text-dim);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: all 0.15s;
+}
+.chart-tab-btn.active {
+    background: var(--accent-job-exclusive);
+    border-color: var(--accent-job-exclusive);
+    color: white;
+}
+.chart-tab-btn:hover:not(.active) {
+    border-color: #60a5fa;
+    color: #60a5fa;
+}
+
+/* Overview: two stacked charts */
+.chart-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+.chart-stack-label {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.25rem;
+}
+.chart-container-sm { position: relative; height: 150px; }
+
+/* Details: 2-col grid */
+.chart-details-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+@media (max-width: 800px) { .chart-details-grid { grid-template-columns: 1fr; } }
+.chart-detail-cell {
+    background: #0f172a;
+    border: 1px solid var(--accent-border);
+    border-radius: 6px;
+    padding: 0.75rem;
+}
+.chart-detail-cell.full-width { grid-column: 1 / -1; }
+.chart-detail-label {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+}
+.chart-container-detail { position: relative; height: 180px; }
+.chart-no-data {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 180px;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    font-style: italic;
+}
 
         /* Jobs panel */
         .jobs-panel {
@@ -289,11 +345,40 @@
             </span>
         </div>
 
-        <!-- Bar chart: jobs per day -->
+        <!-- Charts (tabbed) -->
         <div class="chart-panel">
-            <h2>Jobs Submitted Per Day</h2>
-            <div class="chart-container">
-                <canvas ref="chartCanvas"></canvas>
+            <div class="chart-tab-bar">
+                <button class="chart-tab-btn" :class="{ active: chartTab === 'overview' }" @click="switchChartTab('overview')">Overview</button>
+                <button class="chart-tab-btn" :class="{ active: chartTab === 'details' }" @click="switchChartTab('details')">Details</button>
+            </div>
+
+            <!-- Overview tab -->
+            <div v-show="chartTab === 'overview'" class="chart-stack">
+                <div>
+                    <div class="chart-stack-label">Jobs Submitted Per Day</div>
+                    <div class="chart-container-sm"><canvas ref="chartOverview1"></canvas></div>
+                </div>
+                <div>
+                    <div class="chart-stack-label">Node-Hours Per Day</div>
+                    <div class="chart-container-sm"><canvas ref="chartOverview2"></canvas></div>
+                </div>
+            </div>
+
+            <!-- Details tab -->
+            <div v-show="chartTab === 'details'" class="chart-details-grid">
+                <div class="chart-detail-cell">
+                    <div class="chart-detail-label">Walltime Distribution</div>
+                    <div class="chart-container-detail"><canvas ref="chartDetail1"></canvas></div>
+                </div>
+                <div class="chart-detail-cell">
+                    <div class="chart-detail-label">Node Count Distribution</div>
+                    <div class="chart-container-detail"><canvas ref="chartDetail2"></canvas></div>
+                </div>
+                <div class="chart-detail-cell full-width">
+                    <div class="chart-detail-label">Queue Wait vs Walltime</div>
+                    <div v-if="scatterHasData" class="chart-container-detail"><canvas ref="chartDetail3"></canvas></div>
+                    <div v-else class="chart-no-data">Not enough data (need ≥3 jobs with both walltime and queue wait)</div>
+                </div>
             </div>
         </div>
 
@@ -430,6 +515,7 @@
 <script>
 const { createApp, ref, computed, onMounted, onUnmounted, watch, nextTick } = Vue;
 
+// ── helpers ──────────────────────────────────────────────────────────────────
 const QUEUE_COLORS = ['#3b82f6','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#10b981','#f43f5e','#eab308','#14b8a6','#ec4899'];
 function hashStr(s) { let h=0; for(let i=0;i<s.length;i++){h=((h<<5)-h)+s.charCodeAt(i);h|=0;} return Math.abs(h); }
 function queueColor(name) { return QUEUE_COLORS[hashStr(String(name||'')) % QUEUE_COLORS.length]; }
@@ -469,24 +555,71 @@ function fmtNodeHours(nh) {
     return nh.toFixed(1);
 }
 
+// ── chart bucket helpers ──────────────────────────────────────────────────────
+function parseWalltime(wt) {
+    if (!wt) return 0;
+    const parts = wt.split(':').map(Number);
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 3600 + parts[1] * 60;
+    return 0;
+}
+const WALLTIME_BUCKETS = ['≤1h','1–6h','6–24h','24–72h','>72h'];
+function walltimeBucket(sec) {
+    const h = sec / 3600;
+    if (h <= 1)  return '≤1h';
+    if (h <= 6)  return '1–6h';
+    if (h <= 24) return '6–24h';
+    if (h <= 72) return '24–72h';
+    return '>72h';
+}
+const NODE_BUCKETS = ['1','2–10','11–50','51–200','>200'];
+function nodeCountBucket(n) {
+    if (n <= 1)   return '1';
+    if (n <= 10)  return '2–10';
+    if (n <= 50)  return '11–50';
+    if (n <= 200) return '51–200';
+    return '>200';
+}
+
+const CHART_DEFAULTS = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+        x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } },
+        y: { ticks: { color: '#94a3b8', font: { size: 10 }, precision: 0 }, grid: { color: '#1e293b' } }
+    }
+};
+function destroyCharts(...instances) { instances.forEach(i => { if (i) i.destroy(); }); }
+
+// ── Vue app ───────────────────────────────────────────────────────────────────
 createApp({
     setup() {
-        // Parse entity from URL: /page/user/<name>
         const pathParts = window.location.pathname.split('/');
         const entityName = decodeURIComponent(pathParts[pathParts.length - 1] || '');
 
-        const rangeDays   = ref(7);
-        const loading     = ref(true);
-        const summary     = ref({});
-        const jobs        = ref([]);
-        const stateFilter = ref('ALL');
+        const rangeDays    = ref(7);
+        const loading      = ref(true);
+        const summary      = ref({});
+        const jobs         = ref([]);
+        const stateFilter  = ref('ALL');
         const stateOptions = ['ALL', 'RUNNING', 'QUEUED', 'FINISHED', 'HELD', 'UNKNOWN_END'];
-        const sortKey     = ref('submit_time');
-        const sortDesc    = ref(true);
-        const jobDetail   = ref(null);
-        const chartCanvas = ref(null);
-        let chartInstance = null;
+        const sortKey      = ref('submit_time');
+        const sortDesc     = ref(true);
+        const jobDetail    = ref(null);
+        const chartTab     = ref('overview');
 
+        // Canvas refs
+        const chartOverview1 = ref(null);
+        const chartOverview2 = ref(null);
+        const chartDetail1   = ref(null);
+        const chartDetail2   = ref(null);
+        const chartDetail3   = ref(null);
+
+        // Chart.js instances (not reactive)
+        let co1 = null, co2 = null, cd1 = null, cd2 = null, cd3 = null;
+
+        // ── computed ──
         const filteredJobs = computed(() => {
             const list = [...jobs.value];
             return list.sort((a, b) => {
@@ -498,6 +631,11 @@ createApp({
             });
         });
 
+        const scatterHasData = computed(() =>
+            jobs.value.filter(j => j.queue_time_seconds > 0 && parseWalltime(j.walltime) > 0).length >= 3
+        );
+
+        // ── sort ──
         function sortBy(key) {
             if (sortKey.value === key) sortDesc.value = !sortDesc.value;
             else { sortKey.value = key; sortDesc.value = true; }
@@ -507,64 +645,116 @@ createApp({
             return sortDesc.value ? ' ▼' : ' ▲';
         }
 
+        // ── fetch ──
         async function fetchSummary() {
             const res = await fetch(`/api/user/${encodeURIComponent(entityName)}/summary?range=${rangeDays.value}`);
             if (!res.ok) throw new Error(`Summary API ${res.status}`);
             summary.value = await res.json();
         }
-
         async function fetchJobs() {
             const res = await fetch(`/api/user/${encodeURIComponent(entityName)}/jobs?range=${rangeDays.value}&state=${stateFilter.value}`);
             if (!res.ok) throw new Error(`Jobs API ${res.status}`);
-            const data = await res.json();
-            jobs.value = data.jobs || [];
+            jobs.value = (await res.json()).jobs || [];
         }
-
         async function fetchAll() {
             loading.value = true;
-            try {
-                await Promise.all([fetchSummary(), fetchJobs()]);
-            } finally {
-                loading.value = false;
-            }
+            try { await Promise.all([fetchSummary(), fetchJobs()]); }
+            finally { loading.value = false; }
         }
+        async function setRange(days) { rangeDays.value = days; await fetchAll(); }
 
-        async function setRange(days) {
-            rangeDays.value = days;
-            await fetchAll();
-        }
-
-        function buildChart() {
-            const canvas = chartCanvas.value;
-            if (!canvas || !summary.value.jobs_per_day) return;
-            if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
-            const labels = (summary.value.jobs_per_day || []).map(d => d.date);
-            const counts = (summary.value.jobs_per_day || []).map(d => d.count);
-            chartInstance = new Chart(canvas, {
+        // ── charts ──
+        function buildOverviewCharts() {
+            destroyCharts(co1, co2); co1 = null; co2 = null;
+            if (!chartOverview1.value || !summary.value.jobs_per_day) return;
+            co1 = new Chart(chartOverview1.value, {
                 type: 'bar',
                 data: {
-                    labels,
-                    datasets: [{
-                        label: 'Jobs submitted',
-                        data: counts,
-                        backgroundColor: '#3b82f6',
-                        borderRadius: 3,
-                    }]
+                    labels: summary.value.jobs_per_day.map(d => d.date),
+                    datasets: [{ data: summary.value.jobs_per_day.map(d => d.count), backgroundColor: '#3b82f6', borderRadius: 3 }]
                 },
+                options: CHART_DEFAULTS,
+            });
+            if (!chartOverview2.value || !summary.value.node_hours_per_day) return;
+            co2 = new Chart(chartOverview2.value, {
+                type: 'bar',
+                data: {
+                    labels: summary.value.node_hours_per_day.map(d => d.date),
+                    datasets: [{ data: summary.value.node_hours_per_day.map(d => d.node_hours), backgroundColor: '#8b5cf6', borderRadius: 3 }]
+                },
+                options: CHART_DEFAULTS,
+            });
+        }
+
+        function buildDetailCharts() {
+            destroyCharts(cd1, cd2, cd3); cd1 = null; cd2 = null; cd3 = null;
+            if (!chartDetail1.value) return;
+
+            // Walltime distribution
+            const wtCounts = Object.fromEntries(WALLTIME_BUCKETS.map(b => [b, 0]));
+            jobs.value.forEach(j => { const b = walltimeBucket(parseWalltime(j.walltime)); wtCounts[b]++; });
+            cd1 = new Chart(chartDetail1.value, {
+                type: 'bar',
+                data: {
+                    labels: WALLTIME_BUCKETS,
+                    datasets: [{ data: WALLTIME_BUCKETS.map(b => wtCounts[b]), backgroundColor: '#06b6d4', borderRadius: 3 }]
+                },
+                options: { ...CHART_DEFAULTS, indexAxis: 'y' },
+            });
+
+            // Node count distribution
+            if (!chartDetail2.value) return;
+            const ndCounts = Object.fromEntries(NODE_BUCKETS.map(b => [b, 0]));
+            jobs.value.forEach(j => { const b = nodeCountBucket(j.nodes || 1); ndCounts[b]++; });
+            cd2 = new Chart(chartDetail2.value, {
+                type: 'bar',
+                data: {
+                    labels: NODE_BUCKETS,
+                    datasets: [{ data: NODE_BUCKETS.map(b => ndCounts[b]), backgroundColor: '#f59e0b', borderRadius: 3 }]
+                },
+                options: { ...CHART_DEFAULTS, indexAxis: 'y' },
+            });
+
+            // Scatter: queue wait vs walltime
+            if (!scatterHasData.value || !chartDetail3.value) return;
+            const pts = jobs.value
+                .filter(j => j.queue_time_seconds > 0 && parseWalltime(j.walltime) > 0)
+                .map(j => ({
+                    x: parseFloat((parseWalltime(j.walltime) / 3600).toFixed(2)),
+                    y: parseFloat((j.queue_time_seconds / 3600).toFixed(2))
+                }));
+            cd3 = new Chart(chartDetail3.value, {
+                type: 'scatter',
+                data: { datasets: [{ label: 'Jobs', data: pts, backgroundColor: '#4ade8088', pointRadius: 5 }] },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { callbacks: { label: ctx => `Walltime: ${ctx.parsed.x}h, Queue wait: ${ctx.parsed.y}h` } }
+                    },
                     scales: {
-                        x: { ticks: { color: '#94a3b8', font: { size: 11 } }, grid: { color: '#1e293b' } },
-                        y: { ticks: { color: '#94a3b8', font: { size: 11 }, precision: 0 }, grid: { color: '#1e293b' } }
+                        x: { title: { display: true, text: 'Walltime (h)', color: '#94a3b8', font: { size: 10 } }, ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } },
+                        y: { title: { display: true, text: 'Queue wait (h)', color: '#94a3b8', font: { size: 10 } }, ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#1e293b' } }
                     }
                 }
             });
         }
 
-        watch(() => summary.value.jobs_per_day, () => nextTick(buildChart));
+        async function switchChartTab(tab) {
+            chartTab.value = tab;
+            await nextTick();
+            if (tab === 'overview') buildOverviewCharts();
+            else buildDetailCharts();
+        }
 
+        watch([() => summary.value.jobs_per_day, jobs], async () => {
+            await nextTick();
+            if (chartTab.value === 'overview') buildOverviewCharts();
+            else buildDetailCharts();
+        });
+
+        // ── job detail modal ──
         async function openJobDetail(jid) {
             jobDetail.value = { job_id: jid, _loading: true };
             try {
@@ -585,14 +775,15 @@ createApp({
         });
         onUnmounted(() => {
             window.removeEventListener('keydown', onKeyDown);
-            if (chartInstance) chartInstance.destroy();
+            destroyCharts(co1, co2, cd1, cd2, cd3);
         });
 
         return {
             entityName, rangeDays, loading, summary, jobs, stateFilter, stateOptions,
             sortKey, sortDesc, filteredJobs, jobDetail,
-            chartCanvas,
-            setRange, fetchJobs, sortBy, sortArrow,
+            chartTab, chartOverview1, chartOverview2, chartDetail1, chartDetail2, chartDetail3,
+            scatterHasData,
+            setRange, fetchJobs, sortBy, sortArrow, switchChartTab,
             openJobDetail, closeJobDetail,
             queueColor, fmtDuration, fmtNodeHours, fmtScore, fmtIso, timeSince,
         };
