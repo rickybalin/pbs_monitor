@@ -89,7 +89,7 @@
             </section>
 
             <!-- Jobs Panel (tabbed) -->
-            <section class="panel jobs-panel">
+            <section class="panel jobs-panel" ref="jobsSection">
                 <div class="panel-header">
                     <div class="tab-bar">
                         <button class="tab-btn" :class="{ active: activeTab === 'running' }"
@@ -100,13 +100,19 @@
                                 @click="activeTab = 'queued'">
                             Queued ({{ jobCounts.queued }})
                         </button>
+                        <button class="tab-btn" :class="{ active: activeTab === 'held' }"
+                                @click="activeTab = 'held'">
+                            Held ({{ jobCounts.held }})
+                        </button>
                     </div>
                 </div>
                 <div class="filter-bar">
                     <input type="text" v-model="filterText"
-                           :placeholder="activeTab === 'running' ? 'Filter by owner, project, ID, queue…' : 'Filter by owner, project, ID, queue…'">
+                           placeholder="Filter by owner, project, ID, queue… or field:value (e.g. queue:large)">
                     <span class="filter-count" v-if="filterText">
-                        {{ activeTab === 'running' ? filteredRunningJobs.length : filteredQueuedJobs.length }} matches
+                        <template v-if="activeTab === 'running'">{{ filteredRunningJobs.length }} matches</template>
+                        <template v-else-if="activeTab === 'queued'">{{ filteredQueuedJobs.length }} matches</template>
+                        <template v-else>{{ filteredHeldJobs.length }} matches</template>
                     </span>
                 </div>
                 <div class="table-wrapper">
@@ -185,6 +191,37 @@
                             </tr>
                         </tbody>
                     </table>
+
+                    <!-- Held Jobs Table -->
+                    <table v-if="activeTab === 'held'" class="jobs-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Owner</th>
+                                <th>Project</th>
+                                <th>Allocation</th>
+                                <th>Queue</th>
+                                <th>Nodes</th>
+                                <th>Walltime</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="job in filteredHeldJobs" :key="job.job_id"
+                                @click="openJobDetail(job.job_id)"
+                                style="cursor:pointer">
+                                <td>{{ job.job_id }}</td>
+                                <td><a :href="'/page/user/' + job.owner" target="_blank" class="context-link" @click.stop>{{ job.owner }}</a></td>
+                                <td><a :href="'/page/project/' + job.project" target="_blank" class="context-link" @click.stop>{{ job.project }}</a></td>
+                                <td>{{ job.allocation_type }}</td>
+                                <td><span class="queue-badge" :style="{ backgroundColor: queueColor(job.queue) }">{{ job.queue }}</span></td>
+                                <td>{{ job.nodes }}</td>
+                                <td>{{ job.walltime }}</td>
+                            </tr>
+                            <tr v-if="sortedHeldJobs.length === 0">
+                                <td colspan="7" class="empty-row">No held jobs</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </section>
         </main>
@@ -214,9 +251,19 @@
                     <div v-for="q in sortedDepthBuckets" :key="q.name" class="queue-bar-row">
                         <span class="queue-name">{{ q.name }}</span>
                         <div class="bar-container">
-                            <div class="bar-segment running" :style="{ width: q.runningPctScaled + '%' }" :title="'Running: ' + q.running"></div>
-                            <div class="bar-segment queued"  :style="{ width: q.queuedPctScaled  + '%' }" :title="'Queued: '  + q.queued"></div>
-                            <div class="bar-segment held"    v-if="depthShowHeld" :style="{ width: q.heldPctScaled + '%' }" :title="'Held: ' + q.held"></div>
+                            <div class="bar-segment running"
+                                 :style="{ width: q.runningPctScaled + '%', cursor: q.name !== 'other' ? 'pointer' : 'default' }"
+                                 :title="'Running: ' + q.running + (q.name !== 'other' ? ' — click to filter jobs' : '')"
+                                 @click="q.name !== 'other' && drillDownBar(depthGroupBy, 'running', q.name)"></div>
+                            <div class="bar-segment queued"
+                                 :style="{ width: q.queuedPctScaled + '%', cursor: q.name !== 'other' ? 'pointer' : 'default' }"
+                                 :title="'Queued: ' + q.queued + (q.name !== 'other' ? ' — click to filter jobs' : '')"
+                                 @click="q.name !== 'other' && drillDownBar(depthGroupBy, 'queued', q.name)"></div>
+                            <div class="bar-segment held"
+                                 v-if="depthShowHeld"
+                                 :style="{ width: q.heldPctScaled + '%', cursor: q.name !== 'other' ? 'pointer' : 'default' }"
+                                 :title="'Held: ' + q.held + (q.name !== 'other' ? ' — click to filter jobs' : '')"
+                                 @click="q.name !== 'other' && drillDownBar(depthGroupBy, 'held', q.name)"></div>
                         </div>
                         <span class="queue-counts">
                             <span class="c-run">{{ fmtSysHours(q.running) }}</span> /

@@ -450,6 +450,11 @@ canvas {
 .bar-segment.queued { background-color: var(--accent-busy); }
 .bar-segment.held { background-color: #f97316; } /* orange */
 
+.bar-segment[style*="pointer"]:hover {
+    filter: brightness(1.25);
+    transition: filter 0.15s ease, width 0.3s ease;
+}
+
 .queue-counts {
     font-family: monospace;
     font-size: 0.8rem;

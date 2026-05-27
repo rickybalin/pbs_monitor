@@ -101,6 +101,7 @@ createApp({
         const jobDetailLoading = ref(false);
         const hoveredLegend  = ref(null);  // 'free'|'job'|'resv'|'down'|'offline'|null
         const filterText    = ref('');
+        const jobsSection    = ref(null);   // scroll target for drill-down
         const depthGroupBy   = ref('queue');   // 'queue' | 'allocation' | 'project'
         const depthShowHeld  = ref(false);
 
@@ -170,16 +171,54 @@ createApp({
 
         const sortedRunningJobs = computed(() => sortedList(snapshot.value?.jobs?.running || []));
 
+        // Parse filter text: supports "field:value" syntax or plain free-text.
+        // field aliases: queue, allocation (→allocation_type), project, owner, id
+        function parseFilter(raw) {
+            const text = raw.trim().toLowerCase();
+            if (!text) return null;
+            const colonIdx = text.indexOf(':');
+            if (colonIdx > 0) {
+                const field = text.slice(0, colonIdx).trim();
+                const value = text.slice(colonIdx + 1).trim();
+                if (value) return { field, value };
+            }
+            return { field: null, value: text };
+        }
+
+        function jobMatchesFilter(j, parsed) {
+            if (!parsed) return true;
+            const { field, value } = parsed;
+            if (!field) {
+                // free-text: match any column
+                return (
+                    (j.owner || '').toLowerCase().includes(value) ||
+                    (j.project || '').toLowerCase().includes(value) ||
+                    String(j.job_id).includes(value) ||
+                    (j.queue || '').toLowerCase().includes(value) ||
+                    (j.allocation_type || '').toLowerCase().includes(value)
+                );
+            }
+            // field-specific match
+            switch (field) {
+                case 'queue':      return (j.queue || '').toLowerCase() === value;
+                case 'allocation': return (j.allocation_type || '').toLowerCase() === value;
+                case 'project':    return (j.project || '').toLowerCase() === value;
+                case 'owner':      return (j.owner || '').toLowerCase() === value;
+                case 'id':         return String(j.job_id) === value;
+                default:           return (
+                    (j.owner || '').toLowerCase().includes(value) ||
+                    (j.project || '').toLowerCase().includes(value) ||
+                    String(j.job_id).includes(value) ||
+                    (j.queue || '').toLowerCase().includes(value) ||
+                    (j.allocation_type || '').toLowerCase().includes(value)
+                );
+            }
+        }
+
         const filteredRunningJobs = computed(() => {
-            const q = filterText.value.trim().toLowerCase();
-            if (!q) return sortedRunningJobs.value;
-            return sortedRunningJobs.value.filter(j =>
-                (j.owner || '').toLowerCase().includes(q) ||
-                (j.project || '').toLowerCase().includes(q) ||
-                String(j.job_id).includes(q) ||
-                (j.queue || '').toLowerCase().includes(q) ||
-                (j.allocation_type || '').toLowerCase().includes(q)
-            );
+            const parsed = parseFilter(filterText.value);
+            if (!parsed) return sortedRunningJobs.value;
+            return sortedRunningJobs.value.filter(j => jobMatchesFilter(j, parsed));
         });
 
         const sortedQueuedJobs  = computed(() => {
@@ -201,16 +240,45 @@ createApp({
         });
 
         const filteredQueuedJobs = computed(() => {
-            const q = filterText.value.trim().toLowerCase();
-            if (!q) return sortedQueuedJobs.value;
-            return sortedQueuedJobs.value.filter(j =>
-                (j.owner || '').toLowerCase().includes(q) ||
-                (j.project || '').toLowerCase().includes(q) ||
-                String(j.job_id).includes(q) ||
-                (j.queue || '').toLowerCase().includes(q) ||
-                (j.allocation_type || '').toLowerCase().includes(q)
-            );
+            const parsed = parseFilter(filterText.value);
+            if (!parsed) return sortedQueuedJobs.value;
+            return sortedQueuedJobs.value.filter(j => jobMatchesFilter(j, parsed));
         });
+
+        const sortedHeldJobs = computed(() => {
+            const list = snapshot.value?.jobs?.held || [];
+            return [...list].sort((a, b) => {
+                let va = a['job_id'] ?? '';
+                let vb = b['job_id'] ?? '';
+                if (typeof va === 'string') va = va.toLowerCase();
+                if (typeof vb === 'string') vb = vb.toLowerCase();
+                return va < vb ? -1 : va > vb ? 1 : 0;
+            });
+        });
+
+        const filteredHeldJobs = computed(() => {
+            const parsed = parseFilter(filterText.value);
+            if (!parsed) return sortedHeldJobs.value;
+            return sortedHeldJobs.value.filter(j => jobMatchesFilter(j, parsed));
+        });
+
+        // ── bar drill-down ──
+        // groupBy: 'queue' | 'allocation' | 'project'
+        // state:   'running' | 'queued' | 'held'
+        // name:    bucket name (e.g. 'large', 'insight')
+        function drillDownBar(groupBy, state, name) {
+            if (name === 'other') return; // 'other' is an aggregate — can't filter meaningfully
+            const fieldMap = { queue: 'queue', allocation: 'allocation', project: 'project' };
+            const field = fieldMap[groupBy] || 'queue';
+            filterText.value = `${field}:${name}`;
+            activeTab.value = state;  // 'running' | 'queued' | 'held'
+            // Scroll jobs panel into view
+            nextTick(() => {
+                if (jobsSection.value) {
+                    jobsSection.value.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+        }
 
         const DEPTH_THRESHOLD = 100; // node-hours (internal) below which a bucket is collapsed into "other"
 
@@ -691,12 +759,12 @@ createApp({
             systemInfo, snapshot, loading, error,
             activeTab, sortKey, sortDesc, queuedSortKey, queuedSortDesc, selectedJobId, hoveredJobId, filterText,
             depthGroupBy, depthShowHeld,
-            nodeCanvas, mapContainer, tooltip, tooltipStyle,
+            nodeCanvas, mapContainer, jobsSection, tooltip, tooltipStyle,
             jobDetail, jobDetailLoading,
             systemName, utilization, busyNodes, totalComputeNodes, stateCounts, jobCounts, freshnessClass, timeSinceLastUpdate,
-            sortedRunningJobs, sortedQueuedJobs, filteredRunningJobs, filteredQueuedJobs, sortedDepthBuckets,
+            sortedRunningJobs, sortedQueuedJobs, sortedHeldJobs, filteredRunningJobs, filteredQueuedJobs, filteredHeldJobs, sortedDepthBuckets,
             fetchData, sortJobs, sortQueuedJobs, selectJob, highlightJob, clearHighlight, hoverLegend, clearLegend, isOverdue,
-            openJobDetail, closeJobDetail,
+            openJobDetail, closeJobDetail, drillDownBar,
             onCanvasMove, onCanvasLeave, onCanvasClick,
             fmtDuration, fmtScore, fmtSysHours, fmtIso, queueColor,
             reservations, resvLoading, resvOpen, sortedReservations, resvSortBy, resvSortArrow,
