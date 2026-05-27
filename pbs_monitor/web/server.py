@@ -16,6 +16,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 import re
+import socket
 
 import json as _json
 
@@ -308,6 +309,7 @@ def create_app(config=None) -> FastAPI:
 
         info = {
             "system_name": system_name,
+            "server_host": socket.gethostname(),
             "total_nodes": total_nodes,
             "topology": topology,
             "node_index": node_names,

@@ -124,7 +124,8 @@ createApp({
 
         // ── derived ──
 
-        const systemName = computed(() => systemInfo.value?.system_name || 'PBS Monitor');
+        const systemName  = computed(() => systemInfo.value?.system_name || 'PBS Monitor');
+        const serverHost  = computed(() => systemInfo.value?.server_host  || '');
         const busyNodes = computed(() => {
             const counts = snapshot.value?.state_counts || {};
             return (counts['job-exclusive'] || 0) + (counts['job-sharing'] || 0) + (counts['job-exclusive,resv-exclusive'] || 0);
@@ -761,7 +762,7 @@ createApp({
             depthGroupBy, depthShowHeld,
             nodeCanvas, mapContainer, jobsSection, tooltip, tooltipStyle,
             jobDetail, jobDetailLoading,
-            systemName, utilization, busyNodes, totalComputeNodes, stateCounts, jobCounts, freshnessClass, timeSinceLastUpdate,
+            systemName, serverHost, utilization, busyNodes, totalComputeNodes, stateCounts, jobCounts, freshnessClass, timeSinceLastUpdate,
             sortedRunningJobs, sortedQueuedJobs, sortedHeldJobs, filteredRunningJobs, filteredQueuedJobs, filteredHeldJobs, sortedDepthBuckets,
             fetchData, sortJobs, sortQueuedJobs, selectJob, highlightJob, clearHighlight, hoverLegend, clearLegend, isOverdue,
             openJobDetail, closeJobDetail, drillDownBar,

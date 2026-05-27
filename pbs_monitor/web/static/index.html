@@ -27,7 +27,7 @@
         <!-- ─── Header ─────────────────────────────────────────────── -->
         <header class="header-bar">
             <div class="header-left">
-                <h1>{{ systemName }}</h1>
+                <h1 :title="serverHost ? 'Served from: ' + serverHost : ''">{{ systemName }}</h1>
                 <div class="freshness-indicator" :class="freshnessClass">
                     <span class="dot"></span>
                     {{ timeSinceLastUpdate }}
@@ -107,8 +107,14 @@
                     </div>
                 </div>
                 <div class="filter-bar">
-                    <input type="text" v-model="filterText"
-                           placeholder="Filter by owner, project, ID, queue… or field:value (e.g. queue:large)">
+                    <div class="filter-input-wrap">
+                        <input type="text" v-model="filterText"
+                               placeholder="Filter by owner, project, ID, queue… or field:value (e.g. queue:large)">
+                        <button v-if="filterText" class="filter-clear"
+                                @click="filterText = ''"
+                                title="Clear filter"
+                                aria-label="Clear filter">×</button>
+                    </div>
                     <span class="filter-count" v-if="filterText">
                         <template v-if="activeTab === 'running'">{{ filteredRunningJobs.length }} matches</template>
                         <template v-else-if="activeTab === 'queued'">{{ filteredQueuedJobs.length }} matches</template>

@@ -104,6 +104,7 @@ body {
 .header-left h1 {
     font-size: 1.25rem;
     margin-bottom: 0.25rem;
+    cursor: help;
 }
 
 .freshness-indicator {
@@ -259,12 +260,18 @@ canvas {
     gap: 0.5rem;
 }
 
+.filter-input-wrap {
+    position: relative;
+    flex: 1;
+    display: flex;
+}
+
 .filter-bar input {
     flex: 1;
     background: rgba(0, 0, 0, 0.25);
     border: 1px solid var(--accent-border);
     border-radius: 4px;
-    padding: 0.4rem 0.75rem;
+    padding: 0.4rem 1.75rem 0.4rem 0.75rem;
     color: var(--text-color);
     font-size: 0.8rem;
     outline: none;
@@ -273,6 +280,27 @@ canvas {
 
 .filter-bar input:focus {
     border-color: var(--accent-job-exclusive);
+}
+
+.filter-clear {
+    position: absolute;
+    right: 0.4rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 0 0.3rem;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: color 0.15s, background 0.15s;
+}
+
+.filter-clear:hover {
+    color: var(--text-color);
+    background: rgba(255, 255, 255, 0.08);
 }
 
 .filter-bar input::placeholder {
