@@ -23,6 +23,39 @@ function fmtBin(iso, freq) {
     return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 }
 
+// Collapse reservation-like groups (R##### or M#####) into a single 'Reservations' key
+function collapseResvGroups(series, groups) {
+    const resvRe = /^[RMrm]\d+$/;
+    const collapsed = {};
+    const newGroups = [];
+    let hasResv = false;
+    for (const g of groups) {
+        if (resvRe.test(g)) {
+            hasResv = true;
+            if (!collapsed['Reservations']) collapsed['Reservations'] = null;
+        } else {
+            collapsed[g] = series[g];
+            newGroups.push(g);
+        }
+    }
+    if (hasResv) {
+        // Sum all reservation series element-wise
+        const resvGroups = groups.filter(g => resvRe.test(g));
+        const len = (series[resvGroups[0]] || []).length;
+        const summed = new Array(len).fill(0);
+        for (const g of resvGroups) {
+            const vals = series[g] || [];
+            for (let i = 0; i < len; i++) summed[i] += (vals[i] || 0);
+        }
+        collapsed['Reservations'] = summed.map(v => Math.round(v * 100) / 100);
+        newGroups.push('Reservations');
+    }
+    return { series: collapsed, groups: newGroups.sort() };
+}
+
+// Filter out groups whose total node-hours across all bins is below a threshold
+const DEPTH_MIN_NODE_HOURS = 100;   // hide queues with < 100 total node-hours
+
 const { createApp, ref, reactive, computed, onMounted } = Vue;
 
 createApp({
@@ -143,7 +176,14 @@ createApp({
             } catch {}
         }
 
+        const loadingUtil  = ref(false);
+        const loadingDepth = ref(false);
+        const loadingScatter = ref(false);
+        const loadingAny = computed(() => loadingUtil.value || loadingDepth.value || loadingScatter.value);
+
         async function reload() {
+            loadingUtil.value  = true;
+            loadingDepth.value = true;
             loading.value = true;
             error.value = null;
             try {
@@ -155,20 +195,34 @@ createApp({
                 if (!uRes.ok || !dRes.ok) throw new Error('API error');
                 const uData = await uRes.json();
                 const dData = await dRes.json();
-                renderLineChart('util',  uData, '%', '/ capacity');
-                renderLineChart('depth', dData, 'node-hours', 'queued backlog');
-                utilMeta.value  = `${uData.groups.length} ${uData.group_by}(s) · ${uData.bins.length} bins · ${uData.total_nodes} compute nodes`;
-                depthMeta.value = `${dData.groups.length} ${dData.group_by}(s) · ${dData.bins.length} bins`;
+
+                // Collapse reservation groups
+                const uCollapsed = collapseResvGroups(uData.series, uData.groups);
+                uData.series = uCollapsed.series; uData.groups = uCollapsed.groups;
+                const dCollapsed = collapseResvGroups(dData.series, dData.groups);
+                dData.series = dCollapsed.series; dData.groups = dCollapsed.groups;
+
+                // Filter depth: drop queues with negligible total
+                const dFiltered = filterSmallGroups(dData.series, dData.groups, DEPTH_MIN_NODE_HOURS);
+                dData.series = dFiltered.series; dData.groups = dFiltered.groups;
+
+                renderLineChart('util',  uData, '%', '/ capacity', true);
+                renderLineChart('depth', dData, 'node-hours', 'queued backlog', false);
+                utilMeta.value  = `${uData.groups.length} group(s) · ${uData.bins.length} bins · ${uData.total_nodes} compute nodes`;
+                depthMeta.value = `${dData.groups.length} group(s) · ${dData.bins.length} bins (< ${DEPTH_MIN_NODE_HOURS} node-hours hidden)`;
                 lastRefresh.value = new Date().toLocaleTimeString();
             } catch (e) {
                 console.error(e);
                 error.value = `Failed to load analytics: ${e.message}`;
             } finally {
                 loading.value = false;
+                loadingUtil.value  = false;
+                loadingDepth.value = false;
             }
         }
 
         async function reloadScatter() {
+            loadingScatter.value = true;
             try {
                 const qs = buildParams({ x_axis: xAxis.value });
                 const r = await fetch(`/api/analytics/wait-vs-score?${qs}`);
@@ -179,11 +233,23 @@ createApp({
             } catch (e) {
                 console.error('scatter:', e);
                 scatterNote.value = `Failed: ${e.message}`;
+            } finally {
+                loadingScatter.value = false;
             }
         }
 
         // ── chart renderers ──
-        function _commonLineOpts(yLabel) {
+        function filterSmallGroups(series, groups, minTotal) {
+            const kept = groups.filter(g => {
+                const vals = series[g] || [];
+                return vals.reduce((a, b) => a + b, 0) >= minTotal;
+            });
+            const filtered = {};
+            for (const g of kept) filtered[g] = series[g];
+            return { series: filtered, groups: kept };
+        }
+
+        function _commonLineOpts(yLabel, stacked) {
             return {
                 responsive: true,
                 maintainAspectRatio: false,
@@ -194,14 +260,16 @@ createApp({
                 },
                 scales: {
                     x: { ticks: { color: '#94a3b8', maxRotation: 45, autoSkip: true, maxTicksLimit: 20 },
-                         grid: { color: '#2d3748' } },
+                         grid: { color: '#2d3748' },
+                         stacked: stacked || false },
                     y: { ticks: { color: '#94a3b8' }, grid: { color: '#2d3748' },
-                         title: { display: true, text: yLabel, color: '#94a3b8' } },
+                         title: { display: true, text: yLabel, color: '#94a3b8' },
+                         stacked: stacked || false },
                 },
             };
         }
 
-        function renderLineChart(which, data, yUnit, subtitle) {
+        function renderLineChart(which, data, yUnit, subtitle, stacked) {
             const freq = data.freq;
             const labels = (data.bins || []).map(b => fmtBin(b, freq));
             const sorted = [...(data.groups || [])].sort();
@@ -209,12 +277,12 @@ createApp({
                 label: grp,
                 data: data.series[grp] || [],
                 borderColor: colorFor(grp, sorted),
-                backgroundColor: colorFor(grp, sorted) + '33',
+                backgroundColor: colorFor(grp, sorted) + '99',
                 borderWidth: 1.5,
                 pointRadius: 0,
                 pointHoverRadius: 4,
                 tension: 0.2,
-                fill: false,
+                fill: stacked ? 'origin' : false,
             }));
 
             const canvas = which === 'util' ? utilCanvas.value : depthCanvas.value;
@@ -225,7 +293,7 @@ createApp({
             const chart = new Chart(canvas.getContext('2d'), {
                 type: 'line',
                 data: { labels, datasets },
-                options: _commonLineOpts(yUnit),
+                options: _commonLineOpts(yUnit, stacked),
             });
             if (which === 'util')  _utilChart  = chart;
             else                   _depthChart = chart;
@@ -301,7 +369,7 @@ createApp({
         return {
             // state
             systemName, days, freqOverride, groupBy, xAxis,
-            loading, error, scatterNote, lastRefresh,
+            loading, loadingAny, error, scatterNote, lastRefresh,
             utilMeta, depthMeta,
             freqChoices, effectiveFreq, effectiveFreqLabel,
             // filters

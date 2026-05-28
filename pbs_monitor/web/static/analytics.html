@@ -28,6 +28,10 @@
             <!-- Controls -->
             <section class="panel analytics-controls-panel">
                 <div class="analytics-controls">
+                    <div class="control-spinner" v-if="loadingAny">
+                        <span class="spinner-ring"></span>
+                        <span class="spinner-label">Loading…</span>
+                    </div>
                     <div class="control-group">
                         <label>Range</label>
                         <div class="btn-group">
@@ -90,7 +94,7 @@
             </section>
 
             <!-- Status -->
-            <div v-if="loading" class="analytics-loading">Computing… (may take 30–60s for large ranges on first load)</div>
+            <div v-if="loading && !loadingAny" class="analytics-loading">Computing… (may take 30–60s for large ranges on first load)</div>
             <div v-if="error" class="analytics-error">{{ error }}</div>
 
             <!-- Chart 1: Utilization -->

@@ -31,12 +31,14 @@
 
 .analytics-controls-panel {
     padding: 0.75rem 1rem;
+    overflow: visible;
 }
 .analytics-controls {
     display: flex;
     flex-wrap: wrap;
     gap: 1.25rem;
-    align-items: flex-end;
+    align-items: flex-start;
+    position: relative;
 }
 .control-group {
     display: flex;
@@ -118,7 +120,7 @@
     position: absolute;
     top: calc(100% + 6px);
     left: 0;
-    z-index: 1000;
+    z-index: 9999;
     width: 240px;
     background: #1e293b;
     border: 1px solid var(--accent-border);
@@ -260,4 +262,32 @@
     font-size: 0.75rem;
     color: var(--text-dim);
     font-weight: normal;
+}
+
+/* Loading spinner */
+.control-spinner {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 4px 10px;
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 6px;
+    align-self: center;
+}
+.spinner-label {
+    font-size: 0.78rem;
+    color: #60a5fa;
+}
+.spinner-ring {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(96, 165, 250, 0.3);
+    border-top-color: #60a5fa;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }
