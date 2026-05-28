@@ -924,11 +924,6 @@ canvas {
     font-size: 0.85rem;
     font-style: italic;
 }
-.wait-dist-outer {
-    max-width: 1600px;
-    margin: 0 auto;
-    padding: 0 1rem;
-}
 .wait-dist-panel canvas {
     width: 100% !important;
 }

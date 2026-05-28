@@ -300,18 +300,16 @@
     </div>
 
     <!-- ─── Current Wait Time Distribution ──────────────────────────────── -->
-    <div class="wait-dist-outer">
-        <section class="panel wait-dist-panel">
-            <div class="panel-header" @click="waitOpen = !waitOpen" style="cursor:pointer">
-                <h2>Current Wait Time Distribution</h2>
-                <span class="resv-collapse-icon" :class="{ open: waitOpen }">▼</span>
-            </div>
-            <div v-if="waitOpen" style="padding: 0.75rem 1rem 1rem">
-                <div v-if="waitDistLoading" class="resv-empty">Loading…</div>
-                <div v-else-if="waitDistEmpty" class="resv-empty">No jobs currently queued.</div>
-                <canvas v-show="!waitDistLoading && !waitDistEmpty" ref="waitCanvas" style="max-height:220px"></canvas>
-            </div>
-        </section>
+    <div class="reservations-panel wait-dist-panel">
+        <div class="panel-header" @click="waitOpen = !waitOpen">
+            <h2>Current Wait Time Distribution</h2>
+            <span class="resv-collapse-icon" :class="{ open: waitOpen }">▼</span>
+        </div>
+        <div v-if="waitOpen" style="padding: 0.75rem 1rem 1rem">
+            <div v-if="waitDistLoading" class="resv-empty">Loading…</div>
+            <div v-else-if="waitDistEmpty" class="resv-empty">No jobs currently queued.</div>
+            <canvas v-show="!waitDistLoading && !waitDistEmpty" ref="waitCanvas" style="max-height:220px"></canvas>
+        </div>
     </div>
 
     <!-- ─── Reservations ─────────────────────────────────────────────────── -->
