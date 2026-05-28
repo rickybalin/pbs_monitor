@@ -138,6 +138,21 @@ createApp({
         const totalComputeNodes = computed(() => (systemInfo.value?.node_index || []).length);
         const stateCounts = computed(() => snapshot.value?.state_counts || {});
 
+        // Counts for legend hover labels — sum all state chars that belong to each group
+        const legendCounts = computed(() => {
+            const raw = snapshot.value?.state_counts || {};
+            const result = {};
+            for (const [key, chars] of Object.entries(LEGEND_STATE_CHARS)) {
+                let total = 0;
+                for (const ch of chars) {
+                    const label = STATE_CHAR_LABELS[ch];
+                    if (label) total += raw[label] || 0;
+                }
+                result[key] = total;
+            }
+            return result;
+        });
+
         const jobCounts = computed(() => {
             const s = snapshot.value;
             if (!s) return { running: 0, queued: 0, held: 0 };
@@ -762,7 +777,7 @@ createApp({
             depthGroupBy, depthShowHeld,
             nodeCanvas, mapContainer, jobsSection, tooltip, tooltipStyle,
             jobDetail, jobDetailLoading,
-            systemName, serverHost, utilization, busyNodes, totalComputeNodes, stateCounts, jobCounts, freshnessClass, timeSinceLastUpdate,
+            systemName, serverHost, utilization, busyNodes, totalComputeNodes, stateCounts, legendCounts, jobCounts, freshnessClass, timeSinceLastUpdate,
             sortedRunningJobs, sortedQueuedJobs, sortedHeldJobs, filteredRunningJobs, filteredQueuedJobs, filteredHeldJobs, sortedDepthBuckets,
             fetchData, sortJobs, sortQueuedJobs, selectJob, highlightJob, clearHighlight, hoverLegend, clearLegend, isOverdue,
             openJobDetail, closeJobDetail, drillDownBar,
