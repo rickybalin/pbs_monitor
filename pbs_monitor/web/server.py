@@ -10,13 +10,16 @@ from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from sqlalchemy import create_engine, func
+from sqlalchemy import create_engine, func, or_, and_
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, List, Optional
+import asyncio
+import hashlib
 import re
 import socket
+import time as _time
 
 import json as _json
 
@@ -909,11 +912,449 @@ def create_app(config=None) -> FastAPI:
             })
         return {"reservations": result}
 
+    # ---- analytics helpers ----
+
+    from pbs_monitor.web.analytics_cache import make_cache
+    _analytics_cache = make_cache(db_url)
+
+    # total-nodes module-level cache (refreshed every 5 min)
+    _tnc: dict[str, Any] = {"value": None, "ts": 0.0}
+
+    def _get_total_nodes(db: Session) -> int:
+        if _time.time() - _tnc["ts"] < 300 and _tnc["value"] is not None:
+            return _tnc["value"]
+        count = db.query(func.count(Node.name)).filter(Node.name.like('x%')).scalar() or 0
+        _tnc["value"] = count
+        _tnc["ts"] = _time.time()
+        return count
+
+    def _auto_freq(days: int) -> str:
+        if days <= 7:  return 'h'
+        if days < 90:  return 'd'
+        return 'w'
+
+    def _floor_bin(dt: datetime, freq: str) -> datetime:
+        dt = dt.replace(tzinfo=None)  # strip tz for arithmetic
+        if freq == 'h':
+            return dt.replace(minute=0, second=0, microsecond=0)
+        if freq == 'd':
+            return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        # week — floor to Monday
+        return (dt - timedelta(days=dt.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def _next_bin(t: datetime, freq: str) -> datetime:
+        if freq == 'h': return t + timedelta(hours=1)
+        if freq == 'd': return t + timedelta(days=1)
+        return t + timedelta(weeks=1)
+
+    def _bin_hours(freq: str) -> float:
+        return {'h': 1.0, 'd': 24.0, 'w': 168.0}[freq]
+
+    def _parse_walltime_hours(wt: str) -> float:
+        """Parse PBS walltime string HH:MM:SS or DD:HH:MM:SS → float hours."""
+        if not wt:
+            return 0.0
+        try:
+            parts = [int(x) for x in str(wt).strip().split(':')]
+            if len(parts) == 3:
+                h, m, s = parts
+                return h + m / 60 + s / 3600
+            if len(parts) == 4:
+                d, h, m, s = parts
+                return d * 24 + h + m / 60 + s / 3600
+        except Exception:
+            pass
+        return 0.0
+
+    def _apply_job_filters(
+        query,
+        queue: List[str],
+        queue_exclude: List[str],
+        owner: List[str],
+        owner_exclude: List[str],
+        project: List[str],
+        project_exclude: List[str],
+        allocation_type: List[str],
+        allocation_type_exclude: List[str],
+    ):
+        if queue:              query = query.filter(Job.queue.in_(queue))
+        if queue_exclude:      query = query.filter(~Job.queue.in_(queue_exclude))
+        if owner:              query = query.filter(Job.owner.in_(owner))
+        if owner_exclude:      query = query.filter(~Job.owner.in_(owner_exclude))
+        if project:            query = query.filter(Job.project.in_(project))
+        if project_exclude:    query = query.filter(~Job.project.in_(project_exclude))
+        if allocation_type:    query = query.filter(Job.allocation_type.in_(allocation_type))
+        if allocation_type_exclude: query = query.filter(~Job.allocation_type.in_(allocation_type_exclude))
+        return query
+
+    # ---- analytics endpoints ----
+
+    @app.get("/api/analytics/filters")
+    async def api_analytics_filters(
+        days: int = 30,
+        db: Session = Depends(get_db),
+    ):
+        cutoff = datetime.now() - timedelta(days=days)
+
+        def _fetch():
+            base = db.query(Job).filter(
+                or_(Job.start_time >= cutoff, Job.submit_time >= cutoff)
+            )
+            queues  = sorted({r.queue for r in base.with_entities(Job.queue).distinct() if r.queue})
+            owners  = sorted({r.owner for r in base.with_entities(Job.owner).distinct() if r.owner})
+            projs   = sorted({r.project for r in base.with_entities(Job.project).distinct() if r.project})
+            allocs  = sorted({r.allocation_type for r in base.with_entities(Job.allocation_type).distinct() if r.allocation_type})
+            return {"queues": queues, "owners": owners, "projects": projs, "allocation_types": allocs}
+
+        return await asyncio.get_event_loop().run_in_executor(None, _fetch)
+
+    @app.get("/api/analytics/wait-current")
+    async def api_analytics_wait_current(
+        db: Session = Depends(get_db),
+        queue: List[str] = Query(default=[]),
+        queue_exclude: List[str] = Query(default=[]),
+        owner: List[str] = Query(default=[]),
+        owner_exclude: List[str] = Query(default=[]),
+        project: List[str] = Query(default=[]),
+        project_exclude: List[str] = Query(default=[]),
+        allocation_type: List[str] = Query(default=[]),
+        allocation_type_exclude: List[str] = Query(default=[]),
+    ):
+        BINS = [
+            ('<1hr',   0,    1),
+            ('1-6hr',  1,    6),
+            ('6-12hr', 6,   12),
+            ('12-24hr',12,  24),
+            ('1-2d',   24,  48),
+            ('2-7d',   48, 168),
+            ('7-14d', 168, 336),
+            ('2-3wk', 336, 504),
+            ('3-5wk', 504, 840),
+            ('>1mo',  840, float('inf')),
+        ]
+
+        def _fetch():
+            now = datetime.now()
+            q = db.query(Job).filter(
+                Job.state == JobState.QUEUED,
+                Job.submit_time.isnot(None),
+            )
+            q = _apply_job_filters(q, queue, queue_exclude, owner, owner_exclude,
+                                   project, project_exclude, allocation_type, allocation_type_exclude)
+            jobs = q.all()
+            counts = [0] * len(BINS)
+            for job in jobs:
+                st = job.submit_time
+                if st is None:
+                    continue
+                if st.tzinfo is not None:
+                    st = st.replace(tzinfo=None)
+                wait_h = (now - st).total_seconds() / 3600
+                for i, (_, lo, hi) in enumerate(BINS):
+                    if lo <= wait_h < hi:
+                        counts[i] += 1
+                        break
+            return {"bins": [b[0] for b in BINS], "counts": counts}
+
+        return await asyncio.get_event_loop().run_in_executor(None, _fetch)
+
+    @app.get("/api/analytics/utilization")
+    async def api_analytics_utilization(
+        days: int = 30,
+        freq: Optional[str] = None,
+        group_by: str = 'queue',
+        db: Session = Depends(get_db),
+        queue: List[str] = Query(default=[]),
+        queue_exclude: List[str] = Query(default=[]),
+        owner: List[str] = Query(default=[]),
+        owner_exclude: List[str] = Query(default=[]),
+        project: List[str] = Query(default=[]),
+        project_exclude: List[str] = Query(default=[]),
+        allocation_type: List[str] = Query(default=[]),
+        allocation_type_exclude: List[str] = Query(default=[]),
+    ):
+        if group_by not in ('queue', 'allocation_type'):
+            group_by = 'queue'
+        eff_freq = freq if freq in ('h', 'd', 'w') else _auto_freq(days)
+        now = datetime.now()
+        window_start  = _floor_bin(now - timedelta(days=days), eff_freq)
+        last_complete = _floor_bin(now, eff_freq)
+
+        cache_key = _analytics_cache.make_key({
+            "endpoint": "utilization",
+            "freq": eff_freq,
+            "window_start": window_start.isoformat(),
+            "last_complete": last_complete.isoformat(),
+            "group_by": group_by,
+            "queue": sorted(queue), "queue_exclude": sorted(queue_exclude),
+            "owner": sorted(owner), "owner_exclude": sorted(owner_exclude),
+            "project": sorted(project), "project_exclude": sorted(project_exclude),
+            "allocation_type": sorted(allocation_type),
+            "allocation_type_exclude": sorted(allocation_type_exclude),
+        })
+        cached = _analytics_cache.get(cache_key)
+        if cached:
+            return cached
+
+        total_nodes = _get_total_nodes(db)
+
+        def _compute():
+            q = db.query(Job).filter(
+                Job.end_time > window_start,
+                Job.start_time < last_complete,
+                Job.end_time.isnot(None),
+                Job.start_time.isnot(None),
+                Job.nodes > 0,
+            )
+            q = _apply_job_filters(q, queue, queue_exclude, owner, owner_exclude,
+                                   project, project_exclude, allocation_type, allocation_type_exclude)
+            jobs = q.all()
+
+            # Build bin list
+            bins = []
+            t = window_start
+            while t < last_complete:
+                bins.append(t)
+                t = _next_bin(t, eff_freq)
+
+            # group → bin_index → used_node_hours
+            groups: dict[str, list[float]] = {}
+            cap = total_nodes * _bin_hours(eff_freq)
+
+            for job in jobs:
+                grp = getattr(job, group_by, None) or 'unknown'
+                if grp not in groups:
+                    groups[grp] = [0.0] * len(bins)
+                js = job.start_time
+                je = job.end_time
+                if js and js.tzinfo: js = js.replace(tzinfo=None)
+                if je and je.tzinfo: je = je.replace(tzinfo=None)
+                n = job.nodes or 1
+                for i, t in enumerate(bins):
+                    nt = _next_bin(t, eff_freq)
+                    seg_s = max(js, t)
+                    seg_e = min(je, nt)
+                    hours = max(0.0, (seg_e - seg_s).total_seconds() / 3600)
+                    if hours > 0:
+                        groups[grp][i] += n * hours
+
+            sorted_groups = sorted(groups.keys())
+            bin_labels = [t.isoformat() for t in bins]
+            series = {}
+            for grp in sorted_groups:
+                vals = groups[grp]
+                series[grp] = [round(v / cap * 100, 2) if cap > 0 else 0.0 for v in vals]
+
+            return {
+                "freq": eff_freq,
+                "group_by": group_by,
+                "groups": sorted_groups,
+                "bins": bin_labels,
+                "series": series,
+                "total_nodes": total_nodes,
+            }
+
+        result = await asyncio.get_event_loop().run_in_executor(None, _compute)
+        _analytics_cache.set(cache_key, result)
+        return result
+
+    @app.get("/api/analytics/queue-depth")
+    async def api_analytics_queue_depth(
+        days: int = 30,
+        freq: Optional[str] = None,
+        group_by: str = 'queue',
+        db: Session = Depends(get_db),
+        queue: List[str] = Query(default=[]),
+        queue_exclude: List[str] = Query(default=[]),
+        owner: List[str] = Query(default=[]),
+        owner_exclude: List[str] = Query(default=[]),
+        project: List[str] = Query(default=[]),
+        project_exclude: List[str] = Query(default=[]),
+        allocation_type: List[str] = Query(default=[]),
+        allocation_type_exclude: List[str] = Query(default=[]),
+    ):
+        if group_by not in ('queue', 'allocation_type'):
+            group_by = 'queue'
+        eff_freq = freq if freq in ('h', 'd', 'w') else _auto_freq(days)
+        now = datetime.now()
+        window_start  = _floor_bin(now - timedelta(days=days), eff_freq)
+        last_complete = _floor_bin(now, eff_freq)
+
+        cache_key = _analytics_cache.make_key({
+            "endpoint": "queue-depth",
+            "freq": eff_freq,
+            "window_start": window_start.isoformat(),
+            "last_complete": last_complete.isoformat(),
+            "group_by": group_by,
+            "queue": sorted(queue), "queue_exclude": sorted(queue_exclude),
+            "owner": sorted(owner), "owner_exclude": sorted(owner_exclude),
+            "project": sorted(project), "project_exclude": sorted(project_exclude),
+            "allocation_type": sorted(allocation_type),
+            "allocation_type_exclude": sorted(allocation_type_exclude),
+        })
+        cached = _analytics_cache.get(cache_key)
+        if cached:
+            return cached
+
+        def _compute():
+            # Fetch jobs that were queued at any point in the window
+            q = db.query(Job).filter(
+                Job.submit_time < last_complete,
+                Job.submit_time.isnot(None),
+                or_(
+                    Job.start_time.is_(None),
+                    Job.start_time >= window_start,
+                ),
+                Job.walltime.isnot(None),
+                Job.nodes > 0,
+            )
+            q = _apply_job_filters(q, queue, queue_exclude, owner, owner_exclude,
+                                   project, project_exclude, allocation_type, allocation_type_exclude)
+            jobs = q.all()
+
+            bins = []
+            t = window_start
+            while t < last_complete:
+                bins.append(t)
+                t = _next_bin(t, eff_freq)
+
+            groups: dict[str, list[float]] = {}
+
+            for job in jobs:
+                grp = getattr(job, group_by, None) or 'unknown'
+                if grp not in groups:
+                    groups[grp] = [0.0] * len(bins)
+                wt_h = _parse_walltime_hours(job.walltime)
+                if wt_h <= 0:
+                    continue
+                n = job.nodes or 1
+                nh = n * wt_h
+                sub = job.submit_time
+                sta = job.start_time
+                if sub and sub.tzinfo: sub = sub.replace(tzinfo=None)
+                if sta and sta.tzinfo: sta = sta.replace(tzinfo=None)
+                for i, t in enumerate(bins):
+                    nt = _next_bin(t, eff_freq)
+                    # Job was queued during bin if: submitted before bin ends
+                    # AND (not yet started OR started after bin began)
+                    queued_during = (
+                        sub < nt and
+                        (sta is None or sta >= t)
+                    )
+                    if queued_during:
+                        groups[grp][i] += nh
+
+            sorted_groups = sorted(groups.keys())
+            bin_labels = [t.isoformat() for t in bins]
+            series = {grp: [round(v, 2) for v in groups[grp]] for grp in sorted_groups}
+
+            return {
+                "freq": eff_freq,
+                "group_by": group_by,
+                "groups": sorted_groups,
+                "bins": bin_labels,
+                "series": series,
+                "total_nodes": _tnc.get("value") or 0,
+            }
+
+        result = await asyncio.get_event_loop().run_in_executor(None, _compute)
+        _analytics_cache.set(cache_key, result)
+        return result
+
+    @app.get("/api/analytics/wait-vs-score")
+    async def api_analytics_wait_vs_score(
+        days: int = 30,
+        x_axis: str = 'queue_time',
+        db: Session = Depends(get_db),
+        queue: List[str] = Query(default=[]),
+        queue_exclude: List[str] = Query(default=[]),
+        owner: List[str] = Query(default=[]),
+        owner_exclude: List[str] = Query(default=[]),
+        project: List[str] = Query(default=[]),
+        project_exclude: List[str] = Query(default=[]),
+        allocation_type: List[str] = Query(default=[]),
+        allocation_type_exclude: List[str] = Query(default=[]),
+    ):
+        if x_axis not in ('queue_time', 'elapsed_time'):
+            x_axis = 'queue_time'
+        cutoff = datetime.now() - timedelta(days=days)
+
+        def _fetch():
+            from pbs_monitor.database.models import JobHistory
+            # For each job that started in window, get the score from JobHistory
+            # at the transition to RUNNING state (closest record to start_time)
+            q = db.query(Job).filter(
+                Job.start_time >= cutoff,
+                Job.start_time.isnot(None),
+                Job.submit_time.isnot(None),
+            )
+            q = _apply_job_filters(q, queue, queue_exclude, owner, owner_exclude,
+                                   project, project_exclude, allocation_type, allocation_type_exclude)
+            jobs = q.all()
+
+            # Build a lookup: job_id → score from JobHistory near start_time
+            job_ids = [j.job_id for j in jobs]
+            score_map: dict[str, float] = {}
+            if job_ids:
+                # Get all history records for these jobs with a score
+                history_rows = (
+                    db.query(JobHistory)
+                    .filter(
+                        JobHistory.job_id.in_(job_ids),
+                        JobHistory.score.isnot(None),
+                        JobHistory.state == JobState.RUNNING,
+                    )
+                    .all()
+                )
+                # Take the first RUNNING record per job (chronologically earliest)
+                for h in history_rows:
+                    if h.job_id not in score_map:
+                        score_map[h.job_id] = h.score
+
+            points = []
+            for job in jobs:
+                score = score_map.get(job.job_id)
+                if score is None:
+                    continue
+                js = job.start_time
+                sub = job.submit_time
+                if js and js.tzinfo: js = js.replace(tzinfo=None)
+                if sub and sub.tzinfo: sub = sub.replace(tzinfo=None)
+                queue_time_h = (js - sub).total_seconds() / 3600 if js and sub else None
+                if queue_time_h is None or queue_time_h < 0:
+                    continue
+
+                # elapsed_time: use queue_time_seconds vs actual queue_time
+                # The job has queue_time_seconds stored; for elapsed_time we use it directly
+                if x_axis == 'elapsed_time' and job.queue_time_seconds is not None:
+                    x_val = job.queue_time_seconds / 3600
+                else:
+                    x_val = queue_time_h
+
+                points.append({
+                    "x":      round(x_val, 4),
+                    "y":      round(score, 4),
+                    "queue":  job.queue or 'unknown',
+                    "job_id": job.job_id,
+                    "owner":  job.owner or '',
+                })
+
+            if len(points) < 10:
+                return {"x_axis": x_axis, "points": [],
+                        "note": f"Only {len(points)} scored jobs found in window — insufficient for scatter plot."}
+            return {"x_axis": x_axis, "points": points}
+
+        return await asyncio.get_event_loop().run_in_executor(None, _fetch)
+
     # ---- static files ----
     # Serve index.html at root, everything else from /static
     @app.get("/")
     async def serve_index():
         return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/analytics")
+    async def serve_analytics():
+        return FileResponse(STATIC_DIR / "analytics.html")
 
     app.mount("/css", StaticFiles(directory=str(STATIC_DIR / "css")), name="css")
     app.mount("/js", StaticFiles(directory=str(STATIC_DIR / "js")), name="js")
