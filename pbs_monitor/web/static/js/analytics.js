@@ -207,7 +207,7 @@ createApp({
                 dData.series = dFiltered.series; dData.groups = dFiltered.groups;
 
                 renderLineChart('util',  uData, '%', '/ capacity', true);
-                renderLineChart('depth', dData, 'node-hours', 'queued backlog', false);
+                renderLineChart('depth', dData, 'node-hours', 'queued backlog', true);
                 utilMeta.value  = `${uData.groups.length} group(s) · ${uData.bins.length} bins · ${uData.total_nodes} compute nodes`;
                 depthMeta.value = `${dData.groups.length} group(s) · ${dData.bins.length} bins (< ${DEPTH_MIN_NODE_HOURS} node-hours hidden)`;
                 lastRefresh.value = new Date().toLocaleTimeString();
