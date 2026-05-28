@@ -1196,11 +1196,16 @@ def create_app(config=None) -> FastAPI:
         if cached:
             return cached
 
+        total_nodes = _get_total_nodes(db)
+
         def _compute():
-            # Fetch jobs that were queued at any point in the window
+            # Extend lookback by max PBS walltime (7 days) so jobs that were
+            # queued before the window but hadn't started yet are included.
+            fetch_start = window_start - timedelta(days=7)
             q = db.query(Job).filter(
                 Job.submit_time < last_complete,
                 Job.submit_time.isnot(None),
+                Job.submit_time >= fetch_start,
                 or_(
                     Job.start_time.is_(None),
                     Job.start_time >= window_start,
@@ -1238,7 +1243,6 @@ def create_app(config=None) -> FastAPI:
                     # Job was queued during bin [t, nt) if:
                     #   - submitted before the bin ended, AND
                     #   - not yet started, OR started at/after the bin ended
-                    #     (started during the bin = no longer fully queued)
                     queued_during = (
                         sub < nt and
                         (sta is None or sta >= nt)
@@ -1246,9 +1250,14 @@ def create_app(config=None) -> FastAPI:
                     if queued_during:
                         groups[grp][i] += nh
 
+            # Normalize node-hours → system-hours (divide by total_nodes)
+            denom = total_nodes if total_nodes > 0 else 1
             sorted_groups = sorted(groups.keys())
             bin_labels = [t.isoformat() for t in bins]
-            series = {grp: [round(v, 2) for v in groups[grp]] for grp in sorted_groups}
+            series = {
+                grp: [round(v / denom, 4) for v in groups[grp]]
+                for grp in sorted_groups
+            }
 
             return {
                 "freq": eff_freq,
@@ -1256,7 +1265,8 @@ def create_app(config=None) -> FastAPI:
                 "groups": sorted_groups,
                 "bins": bin_labels,
                 "series": series,
-                "total_nodes": _tnc.get("value") or 0,
+                "total_nodes": total_nodes,
+                "unit": "system-hours",
             }
 
         result = await asyncio.get_event_loop().run_in_executor(None, _compute)

@@ -207,9 +207,9 @@ createApp({
                 dData.series = dFiltered.series; dData.groups = dFiltered.groups;
 
                 renderLineChart('util',  uData, '%', '/ capacity', true);
-                renderLineChart('depth', dData, 'node-hours', 'queued backlog', true);
+                renderLineChart('depth', dData, 'system-hours', 'queued backlog', true);
                 utilMeta.value  = `${uData.groups.length} group(s) · ${uData.bins.length} bins · ${uData.total_nodes} compute nodes`;
-                depthMeta.value = `${dData.groups.length} group(s) · ${dData.bins.length} bins (< ${DEPTH_MIN_NODE_HOURS} node-hours hidden)`;
+                depthMeta.value = `${dData.groups.length} group(s) · ${dData.bins.length} bins · normalized to ${dData.total_nodes} nodes (< ${DEPTH_MIN_NODE_HOURS} system-hours hidden)`;
                 lastRefresh.value = new Date().toLocaleTimeString();
             } catch (e) {
                 console.error(e);
@@ -256,7 +256,32 @@ createApp({
                 interaction: { mode: 'index', intersect: false },
                 plugins: {
                     legend: { labels: { color: '#e0e0e0', boxWidth: 12 }, position: 'bottom' },
-                    tooltip: { mode: 'index', intersect: false },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                        itemSort: (a, b) => b.parsed.y - a.parsed.y,
+                        callbacks: {
+                            beforeBody: () => [],
+                            afterBody: (items) => {
+                                // items are already sorted largest-first by itemSort
+                                const total = items.reduce((s, it) => s + (it.parsed.y || 0), 0);
+                                const hidden = Math.max(0, items.length - 5);
+                                return [
+                                    `Total: ${total.toFixed(2)}`,
+                                    ...(hidden > 0 ? [`(+${hidden} more not shown)`] : []),
+                                ];
+                            },
+                            label: (item) => {
+                                // Only render top 5 items
+                                const sorted = item.chart.tooltip.dataPoints
+                                    .slice()
+                                    .sort((a, b) => b.parsed.y - a.parsed.y);
+                                const rank = sorted.findIndex(d => d.datasetIndex === item.datasetIndex);
+                                if (rank >= 5) return null;
+                                return ` ${item.dataset.label}: ${item.parsed.y.toFixed(2)}`;
+                            },
+                        },
+                    },
                 },
                 scales: {
                     x: { ticks: { color: '#94a3b8', maxRotation: 45, autoSkip: true, maxTicksLimit: 20 },
