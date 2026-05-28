@@ -230,9 +230,17 @@ def create_app(config=None) -> FastAPI:
     connect_args: dict[str, Any] = {}
     if db_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
-        connect_args["timeout"] = 60  # wait up to 60s if the collector holds a write lock (Lustre)
-
-    engine = create_engine(db_url, connect_args=connect_args)
+        connect_args["timeout"] = 60
+        # Open in URI/read-only mode — the web server never writes the main DB,
+        # and read-only connections bypass SQLite's write-lock entirely,
+        # which is critical on Lustre where the collector holds frequent locks.
+        raw_path = db_url.replace("sqlite:///", "")
+        engine = create_engine(
+            f"sqlite:///file:{raw_path}?mode=ro&uri=true",
+            connect_args=connect_args,
+        )
+    else:
+        engine = create_engine(db_url, connect_args=connect_args)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
     app = FastAPI(title="PBS Monitor Dashboard")
