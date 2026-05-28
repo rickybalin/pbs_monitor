@@ -4,12 +4,6 @@
 
 // ── constants ────────────────────────────────────────────────────────────────
 
-const STATE_COLORS = {
-    A: '#4ade80', B: '#6b7280', C: '#ef4444', D: '#f59e0b',
-    E: '#3b82f6', F: '#06b6d4', G: '#8b5cf6', H: '#a855f7',
-    I: '#4b5563', J: '#7f1d1d', K: '#581c87', L: '#2563eb',
-    M: '#4c1d95', N: '#374151',
-};
 const STATE_CHAR_LABELS = {
     A:'free', B:'offline', C:'down', D:'busy', E:'job-exclusive',
     F:'job-sharing', G:'reserve', H:'resv-exclusive', I:'down,offline',
@@ -18,14 +12,30 @@ const STATE_CHAR_LABELS = {
 };
 const FALLBACK_COLOR = '#1f2937';
 
-// Maps legend hover keys → the state chars that belong to that group
-const LEGEND_STATE_CHARS = {
-    free:    new Set(['A']),
-    job:     new Set(['E','F','L']),
-    resv:    new Set(['G','H','L','M']),
-    down:    new Set(['C','I','J','K']),
-    offline: new Set(['B','I','K','M']),
+// Down color (gray — distinct from job blues, visible against dark background)
+const DOWN_COLOR  = '#6b7280';
+const FREE_COLOR  = '#4ade80';
+const JOB_COLOR   = '#3b82f6'; // base; individual jobs use JOB_PALETTE
+
+// Per-char render color — all down/offline variants share gray
+const STATE_COLORS = {
+    A: FREE_COLOR,
+    B: DOWN_COLOR, C: DOWN_COLOR, I: DOWN_COLOR,
+    J: DOWN_COLOR, K: DOWN_COLOR, M: DOWN_COLOR,
+    E: '#3b82f6', F: '#06b6d4', L: '#2563eb',
+    G: '#8b5cf6', H: '#a855f7',
+    D: '#f59e0b', N: '#374151',
 };
+
+// Three mutually exclusive legend states (priority: job > down > free)
+// Resv is a separate overlay filter
+const LEGEND_STATE_CHARS = {
+    free: new Set(['A']),
+    job:  new Set(['E','F','L']),
+    down: new Set(['B','C','I','J','K','M']),
+};
+// State chars that include a reservation component
+const RESV_CHARS = new Set(['G','H','L','M']);
 
 // Brighten a hex color for the legend-hover highlight
 function brightenColor(hex) {
@@ -99,7 +109,9 @@ createApp({
         const hoveredJobId   = ref(null);
         const jobDetail      = ref(null);   // detailed job data for modal
         const jobDetailLoading = ref(false);
-        const hoveredLegend  = ref(null);  // 'free'|'job'|'resv'|'down'|'offline'|null
+        const hoveredLegend  = ref(null);  // 'free'|'job'|'down'|null — mouse hover (no lock)
+        const lockedLegend  = ref(null);  // 'free'|'job'|'down'|null — click-to-lock
+        const resvFilter    = ref(false); // reservation overlay toggle
         const filterText    = ref('');
         const jobsSection    = ref(null);   // scroll target for drill-down
         const depthGroupBy   = ref('queue');   // 'queue' | 'allocation' | 'project'
@@ -138,19 +150,20 @@ createApp({
         const totalComputeNodes = computed(() => (systemInfo.value?.node_index || []).length);
         const stateCounts = computed(() => snapshot.value?.state_counts || {});
 
-        // Counts for legend hover labels — sum all state chars that belong to each group
+        // Counts for legend labels — exclusive priority: job > down > free
+        // Each compute node counted exactly once.
         const legendCounts = computed(() => {
-            const raw = snapshot.value?.state_counts || {};
-            const result = {};
-            for (const [key, chars] of Object.entries(LEGEND_STATE_CHARS)) {
-                let total = 0;
-                for (const ch of chars) {
-                    const label = STATE_CHAR_LABELS[ch];
-                    if (label) total += raw[label] || 0;
-                }
-                result[key] = total;
+            const stateStr  = snapshot.value?.state_string || '';
+            const snapIdxs  = systemInfo.value?.snapshot_indices || [];
+            const counts = { free: 0, job: 0, down: 0, resv: 0 };
+            for (const si of snapIdxs) {
+                const ch = (si != null && si < stateStr.length) ? stateStr[si] : '0';
+                if (LEGEND_STATE_CHARS.job.has(ch))       counts.job++;
+                else if (LEGEND_STATE_CHARS.down.has(ch)) counts.down++;
+                else if (LEGEND_STATE_CHARS.free.has(ch)) counts.free++;
+                if (RESV_CHARS.has(ch)) counts.resv++;
             }
-            return result;
+            return counts;
         });
 
         const jobCounts = computed(() => {
@@ -546,22 +559,37 @@ createApp({
                 : selectedJobId.value
                     ? jobToIndices.get(selectedJobId.value)
                     : null;
-            const legendChars = hoveredLegend.value ? LEGEND_STATE_CHARS[hoveredLegend.value] : null;
+            // Active legend: locked takes priority over hovered
+            const activeLegend = lockedLegend.value || hoveredLegend.value;
+            const legendChars  = activeLegend ? LEGEND_STATE_CHARS[activeLegend] : null;
+            const resvOn       = resvFilter.value;
 
             for (const cell of layout) {
                 // Map layout position → snapshot_data index
                 const snapIdx = snapIndices[cell.idx];
                 const ch = (snapIdx != null) ? (stateStr[snapIdx] || '0') : '0';
-                let color = STATE_COLORS[ch] || FALLBACK_COLOR;
+                const isResv  = RESV_CHARS.has(ch);
 
+                // Base color
+                let color = STATE_COLORS[ch] || FALLBACK_COLOR;
                 if ('EFL'.includes(ch)) {
                     const jid = nodeToJobMap.get(cell.idx);
                     if (jid) color = jobColor(jid);
                 }
 
-                // Legend hover: brighten matching nodes, dim everything else
-                if (legendChars) {
-                    color = legendChars.has(ch) ? brightenColor(STATE_COLORS[ch] || FALLBACK_COLOR) : '#111827';
+                // Determine visibility under active filters
+                const stateMatch = !legendChars || legendChars.has(ch);
+                const resvMatch  = !resvOn || isResv;
+                const visible    = stateMatch && resvMatch;
+
+                if (legendChars || resvOn) {
+                    // Something is active: brighten visible, dim hidden
+                    color = visible ? brightenColor(STATE_COLORS[ch] || FALLBACK_COLOR) : '#111827';
+                    // Re-apply job palette for brightened job nodes
+                    if (visible && 'EFL'.includes(ch)) {
+                        const jid = nodeToJobMap.get(cell.idx);
+                        if (jid) color = brightenColor(jobColor(jid));
+                    }
                 }
 
                 ctx.fillStyle = color;
@@ -710,8 +738,25 @@ createApp({
         function onKeyDown(e) {
             if (e.key === 'Escape' && jobDetail.value) closeJobDetail();
         }
-        function hoverLegend(key)   { hoveredLegend.value = key; requestAnimationFrame(drawMap); }
-        function clearLegend()      { hoveredLegend.value = null; requestAnimationFrame(drawMap); }
+        function hoverLegend(key) {
+            // Only apply hover effect when that state isn't already locked
+            if (lockedLegend.value !== key) hoveredLegend.value = key;
+            requestAnimationFrame(drawMap);
+        }
+        function clearLegend() {
+            hoveredLegend.value = null;
+            requestAnimationFrame(drawMap);
+        }
+        function clickLegend(key) {
+            // Toggle lock: same key → unlock; different key → switch lock
+            lockedLegend.value = (lockedLegend.value === key) ? null : key;
+            hoveredLegend.value = null;
+            requestAnimationFrame(drawMap);
+        }
+        function toggleResv() {
+            resvFilter.value = !resvFilter.value;
+            requestAnimationFrame(drawMap);
+        }
         function isOverdue(job)     { return job.remaining_seconds <= 0 && job.elapsed_seconds > 0; }
 
         const tooltipStyle = computed(() => ({ left: tooltip.x + 'px', top: tooltip.y + 'px' }));
@@ -778,8 +823,9 @@ createApp({
             nodeCanvas, mapContainer, jobsSection, tooltip, tooltipStyle,
             jobDetail, jobDetailLoading,
             systemName, serverHost, utilization, busyNodes, totalComputeNodes, stateCounts, legendCounts, jobCounts, freshnessClass, timeSinceLastUpdate,
+            lockedLegend, resvFilter,
             sortedRunningJobs, sortedQueuedJobs, sortedHeldJobs, filteredRunningJobs, filteredQueuedJobs, filteredHeldJobs, sortedDepthBuckets,
-            fetchData, sortJobs, sortQueuedJobs, selectJob, highlightJob, clearHighlight, hoverLegend, clearLegend, isOverdue,
+            fetchData, sortJobs, sortQueuedJobs, selectJob, highlightJob, clearHighlight, hoverLegend, clearLegend, clickLegend, toggleResv, isOverdue,
             openJobDetail, closeJobDetail, drillDownBar,
             onCanvasMove, onCanvasLeave, onCanvasClick,
             fmtDuration, fmtScore, fmtSysHours, fmtIso, queueColor,

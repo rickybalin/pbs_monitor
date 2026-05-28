@@ -202,6 +202,23 @@ canvas {
     background-color: rgba(255, 255, 255, 0.1);
 }
 
+.legend-locked {
+    background-color: rgba(255, 255, 255, 0.18) !important;
+    outline: 1px solid rgba(255, 255, 255, 0.35);
+    outline-offset: 1px;
+}
+
+.legend-divider {
+    color: rgba(255, 255, 255, 0.2);
+    font-size: 0.9rem;
+    padding: 0 0.15rem;
+    user-select: none;
+}
+
+.legend-resv-toggle {
+    font-style: italic;
+}
+
 .color-box {
     width: 12px;
     height: 12px;

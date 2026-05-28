@@ -63,11 +63,27 @@
                 <div class="panel-header">
                     <h2>Node Map ({{ totalComputeNodes }})</h2>
                     <div class="legend">
-                        <span class="legend-item legend-hover" @mouseenter="hoverLegend('free')" @mouseleave="clearLegend()"><i class="color-box" style="background:#4ade80"></i>Free {{ legendCounts['free'] || 0 }}</span>
-                        <span class="legend-item legend-hover" @mouseenter="hoverLegend('job')" @mouseleave="clearLegend()"><i class="color-box" style="background:#3b82f6"></i>Job {{ legendCounts['job'] || 0 }}</span>
-                        <span class="legend-item legend-hover" @mouseenter="hoverLegend('resv')" @mouseleave="clearLegend()"><i class="color-box" style="background:#a855f7"></i>Resv {{ legendCounts['resv'] || 0 }}</span>
-                        <span class="legend-item legend-hover" @mouseenter="hoverLegend('down')" @mouseleave="clearLegend()"><i class="color-box" style="background:#ef4444"></i>Down {{ legendCounts['down'] || 0 }}</span>
-                        <span class="legend-item legend-hover" @mouseenter="hoverLegend('offline')" @mouseleave="clearLegend()"><i class="color-box" style="background:#6b7280"></i>Offline {{ legendCounts['offline'] || 0 }}</span>
+                        <span class="legend-item legend-hover"
+                              :class="{ 'legend-locked': lockedLegend === 'free' }"
+                              @mouseenter="hoverLegend('free')" @mouseleave="clearLegend()" @click="clickLegend('free')">
+                            <i class="color-box" style="background:#4ade80"></i>Free {{ legendCounts['free'] || 0 }}
+                        </span>
+                        <span class="legend-item legend-hover"
+                              :class="{ 'legend-locked': lockedLegend === 'job' }"
+                              @mouseenter="hoverLegend('job')" @mouseleave="clearLegend()" @click="clickLegend('job')">
+                            <i class="color-box" style="background:#3b82f6"></i>Job {{ legendCounts['job'] || 0 }}
+                        </span>
+                        <span class="legend-item legend-hover"
+                              :class="{ 'legend-locked': lockedLegend === 'down' }"
+                              @mouseenter="hoverLegend('down')" @mouseleave="clearLegend()" @click="clickLegend('down')">
+                            <i class="color-box" style="background:#6b7280"></i>Down {{ legendCounts['down'] || 0 }}
+                        </span>
+                        <span class="legend-divider">|</span>
+                        <span class="legend-item legend-hover legend-resv-toggle"
+                              :class="{ 'legend-locked': resvFilter }"
+                              @click="toggleResv()">
+                            <i class="color-box" style="background:#8b5cf6"></i>Resv {{ legendCounts['resv'] || 0 }}
+                        </span>
                     </div>
                 </div>
                 <div class="canvas-container" ref="mapContainer"
