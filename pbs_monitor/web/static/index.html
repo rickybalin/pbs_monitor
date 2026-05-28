@@ -79,11 +79,10 @@
                             <i class="color-box" style="background:#6b7280"></i>Down {{ legendCounts['down'] || 0 }}
                         </span>
                         <span class="legend-divider">|</span>
-                        <span class="legend-item legend-hover legend-resv-toggle"
-                              :class="{ 'legend-locked': resvFilter }"
-                              @click="toggleResv()">
-                            <i class="color-box" style="background:#8b5cf6"></i>Resv {{ legendCounts['resv'] || 0 }}
-                        </span>
+                        <label class="legend-resv-toggle">
+                            <input type="checkbox" :checked="resvFilter" @change="toggleResv()">
+                            Resv {{ legendCounts['resv'] || 0 }}
+                        </label>
                     </div>
                 </div>
                 <div class="canvas-container" ref="mapContainer"

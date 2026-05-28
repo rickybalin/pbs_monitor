@@ -216,7 +216,21 @@ canvas {
 }
 
 .legend-resv-toggle {
-    font-style: italic;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #a78bfa;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    user-select: none;
+}
+
+.legend-resv-toggle input[type="checkbox"] {
+    accent-color: #a78bfa;
+    cursor: pointer;
 }
 
 .color-box {
