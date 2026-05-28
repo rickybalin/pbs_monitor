@@ -1235,11 +1235,13 @@ def create_app(config=None) -> FastAPI:
                 if sta and sta.tzinfo: sta = sta.replace(tzinfo=None)
                 for i, t in enumerate(bins):
                     nt = _next_bin(t, eff_freq)
-                    # Job was queued during bin if: submitted before bin ends
-                    # AND (not yet started OR started after bin began)
+                    # Job was queued during bin [t, nt) if:
+                    #   - submitted before the bin ended, AND
+                    #   - not yet started, OR started at/after the bin ended
+                    #     (started during the bin = no longer fully queued)
                     queued_during = (
                         sub < nt and
-                        (sta is None or sta >= t)
+                        (sta is None or sta >= nt)
                     )
                     if queued_during:
                         groups[grp][i] += nh
