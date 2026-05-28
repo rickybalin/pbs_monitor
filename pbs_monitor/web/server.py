@@ -1359,6 +1359,71 @@ def create_app(config=None) -> FastAPI:
     app.mount("/css", StaticFiles(directory=str(STATIC_DIR / "css")), name="css")
     app.mount("/js", StaticFiles(directory=str(STATIC_DIR / "js")), name="js")
 
+    # ---- cache pre-warm on startup ----
+    @app.on_event("startup")
+    async def _prewarm_cache() -> None:
+        """Fire common analytics queries in the background at startup so the
+        first user page-load hits the cache instead of waiting 30-60s."""
+        import logging
+        log = logging.getLogger(__name__)
+
+        async def _warm(days_val: int, freq_val: str, group: str) -> None:
+            now = datetime.now()
+            eff_freq = freq_val
+            window_start  = _floor_bin(now - timedelta(days=days_val), eff_freq)
+            last_complete = _floor_bin(now, eff_freq)
+
+            for endpoint in ("utilization", "queue-depth"):
+                key = _analytics_cache.make_key({
+                    "endpoint": endpoint,
+                    "freq": eff_freq,
+                    "window_start": window_start.isoformat(),
+                    "last_complete": last_complete.isoformat(),
+                    "group_by": group,
+                    "queue": [], "queue_exclude": [],
+                    "owner": [], "owner_exclude": [],
+                    "project": [], "project_exclude": [],
+                    "allocation_type": [], "allocation_type_exclude": [],
+                })
+                if _analytics_cache.get(key):
+                    log.info("cache prewarm: %s days=%d freq=%s group=%s — already cached",
+                             endpoint, days_val, eff_freq, group)
+                    continue
+
+                log.info("cache prewarm: starting %s days=%d freq=%s group=%s",
+                         endpoint, days_val, eff_freq, group)
+                try:
+                    db = SessionLocal()
+                    try:
+                        if endpoint == "utilization":
+                            await api_analytics_utilization(
+                                days=days_val, freq=eff_freq, group_by=group, db=db,
+                                queue=[], queue_exclude=[], owner=[], owner_exclude=[],
+                                project=[], project_exclude=[],
+                                allocation_type=[], allocation_type_exclude=[],
+                            )
+                        else:
+                            await api_analytics_queue_depth(
+                                days=days_val, freq=eff_freq, group_by=group, db=db,
+                                queue=[], queue_exclude=[], owner=[], owner_exclude=[],
+                                project=[], project_exclude=[],
+                                allocation_type=[], allocation_type_exclude=[],
+                            )
+                    finally:
+                        db.close()
+                    log.info("cache prewarm: done %s days=%d freq=%s group=%s",
+                             endpoint, days_val, eff_freq, group)
+                except Exception as exc:
+                    log.warning("cache prewarm error: %s", exc)
+
+        async def _run_all() -> None:
+            # Warm the two most common views: 30d/daily and 7d/hourly, both group_by options
+            for days_val, freq_val in [(30, 'd'), (7, 'h'), (90, 'd')]:
+                for group in ('queue', 'allocation_type'):
+                    await _warm(days_val, freq_val, group)
+
+        asyncio.create_task(_run_all())
+
     return app
 
 
