@@ -802,10 +802,73 @@ createApp({
             return resvSortDesc.value ? ' ▼' : ' ▲';
         }
 
+        // ── wait distribution chart ──
+
+        const waitOpen        = ref(true);
+        const waitDistLoading = ref(false);
+        const waitDistEmpty   = ref(false);
+        const waitCanvas      = ref(null);
+        let _waitChart        = null;
+
+        function _initWaitChart(data) {
+            if (!waitCanvas.value) return;
+            const ctx = waitCanvas.value.getContext('2d');
+            _waitChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.bins,
+                    datasets: [{
+                        label: 'Jobs waiting',
+                        data: data.counts,
+                        backgroundColor: '#3b82f6',
+                        borderRadius: 3,
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.x} jobs` } },
+                    },
+                    scales: {
+                        x: { ticks: { color: '#94a3b8' }, grid: { color: '#2d3748' } },
+                        y: { ticks: { color: '#94a3b8' }, grid: { color: '#2d3748' } },
+                    },
+                },
+            });
+        }
+
+        function _updateWaitChart(data) {
+            if (!_waitChart) { _initWaitChart(data); return; }
+            _waitChart.data.labels = data.bins;
+            _waitChart.data.datasets[0].data = data.counts;
+            _waitChart.update();
+        }
+
+        async function fetchWaitDist() {
+            if (!_waitChart) waitDistLoading.value = true;
+            try {
+                const r = await fetch('/api/analytics/wait-current');
+                if (!r.ok) return;
+                const data = await r.json();
+                const total = (data.counts || []).reduce((a, b) => a + b, 0);
+                waitDistEmpty.value = total === 0;
+                if (total > 0) {
+                    await nextTick();
+                    _updateWaitChart(data);
+                }
+            } finally {
+                waitDistLoading.value = false;
+            }
+        }
+
         onMounted(async () => {
             await fetchData();
             fetchReservations();
-            pollTimer = setInterval(fetchData, 30000);
+            fetchWaitDist();
+            pollTimer = setInterval(() => { fetchData(); fetchWaitDist(); }, 30000);
             window.addEventListener('resize', onResize);
             window.addEventListener('keydown', onKeyDown);
         });
@@ -830,6 +893,7 @@ createApp({
             onCanvasMove, onCanvasLeave, onCanvasClick,
             fmtDuration, fmtScore, fmtSysHours, fmtIso, queueColor,
             reservations, resvLoading, resvOpen, sortedReservations, resvSortBy, resvSortArrow,
+            waitOpen, waitDistLoading, waitDistEmpty, waitCanvas, fetchWaitDist,
         };
     }
 }).mount('#app');
