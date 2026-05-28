@@ -805,6 +805,13 @@ createApp({
         // ── wait distribution chart ──
 
         const waitOpen        = ref(true);
+
+        watch(waitOpen, async (open) => {
+            if (open && _waitChart) {
+                await nextTick();
+                _waitChart.resize();
+            }
+        });
         const waitDistLoading = ref(false);
         const waitDistEmpty   = ref(false);
         const waitCanvas      = ref(null);

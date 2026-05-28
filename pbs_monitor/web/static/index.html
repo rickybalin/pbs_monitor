@@ -305,7 +305,7 @@
             <h2>Current Wait Time Distribution</h2>
             <span class="resv-collapse-icon" :class="{ open: waitOpen }">▼</span>
         </div>
-        <div v-if="waitOpen" style="padding: 0.75rem 1rem 1rem">
+        <div v-show="waitOpen" style="padding: 0.75rem 1rem 1rem">
             <div v-if="waitDistLoading" class="resv-empty">Loading…</div>
             <div v-else-if="waitDistEmpty" class="resv-empty">No jobs currently queued.</div>
             <canvas v-show="!waitDistLoading && !waitDistEmpty" ref="waitCanvas" style="max-height:220px"></canvas>
