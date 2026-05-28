@@ -230,7 +230,7 @@ def create_app(config=None) -> FastAPI:
     connect_args: dict[str, Any] = {}
     if db_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
-        connect_args["timeout"] = 30  # wait up to 30s if the collector holds a write lock
+        connect_args["timeout"] = 60  # wait up to 60s if the collector holds a write lock (Lustre)
 
     engine = create_engine(db_url, connect_args=connect_args)
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -1429,10 +1429,14 @@ def create_app(config=None) -> FastAPI:
                     log.warning("cache prewarm error: %s", exc)
 
         async def _run_all() -> None:
-            # Warm the two most common views: 30d/daily and 7d/hourly, both group_by options
+            # Delay so the server finishes startup and handles the initial
+            # page load before kicking off heavy background queries.
+            await asyncio.sleep(30)
+            # Warm the most common views one at a time to avoid lock contention
             for days_val, freq_val in [(30, 'd'), (7, 'h'), (90, 'd')]:
                 for group in ('queue', 'allocation_type'):
                     await _warm(days_val, freq_val, group)
+                    await asyncio.sleep(2)  # brief gap between queries
 
         asyncio.create_task(_run_all())
 
