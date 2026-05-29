@@ -1230,17 +1230,28 @@ def create_app(config=None) -> FastAPI:
         total_nodes = _get_total_nodes(db)
 
         def _compute():
-            # Match CLI behaviour: only include jobs that actually
-            # started (start_time IS NOT NULL).  Jobs that were
-            # submitted but never ran (cancelled/deleted) would
-            # otherwise be treated as queued from submission to now,
-            # massively inflating the backlog numbers.
+            # Include two classes of jobs:
+            # 1. Jobs that started within the window (historical backlog)
+            # 2. Jobs currently queued/held/waiting (still in queue now)
+            # Exclude cancelled/finished jobs that never got a start_time
+            # — those would be treated as queued from submission to now,
+            # massively inflating the backlog.
+            _active_states = (
+                JobState.QUEUED, JobState.HELD, JobState.WAITING,
+                JobState.TRANSITIONING,
+            )
             q = db.query(Job).filter(
-                Job.start_time.isnot(None),
                 Job.submit_time.isnot(None),
-                Job.start_time >= window_start,
                 Job.walltime.isnot(None),
                 Job.nodes > 0,
+                or_(
+                    # Historical: jobs that actually started in the window
+                    and_(Job.start_time.isnot(None),
+                         Job.start_time >= window_start),
+                    # Current: jobs still sitting in the queue
+                    and_(Job.start_time.is_(None),
+                         Job.state.in_(_active_states)),
+                ),
             )
             q = _apply_job_filters(q, queue, queue_exclude, owner, owner_exclude,
                                    project, project_exclude, allocation_type, allocation_type_exclude)
