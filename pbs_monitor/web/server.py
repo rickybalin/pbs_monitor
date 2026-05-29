@@ -231,12 +231,20 @@ def create_app(config=None) -> FastAPI:
     if db_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
         connect_args["timeout"] = 60
-        # Open in URI/read-only mode — the web server never writes the main DB,
-        # and read-only connections bypass SQLite's write-lock entirely,
-        # which is critical on Lustre where the collector holds frequent locks.
+        # Open in URI/read-only + immutable mode:
+        #   mode=ro   — no write locks acquired, bypasses SQLite's write-lock
+        #               entirely (critical on Lustre where the collector holds
+        #               frequent write locks).
+        #   immutable=1 — tells SQLite the DB file will not change underneath
+        #               this connection, allowing it to skip shared-cache locks
+        #               on compatible SQLite builds. Safe here because we never
+        #               write from the web server.
+        # Together these ensure the web server can never contribute to the
+        # lock-storm that occurred on 2026-05-29 when a Ctrl-C during
+        # connection teardown left a stale lock on Lustre/Flare.
         raw_path = db_url.replace("sqlite:///", "")
         engine = create_engine(
-            f"sqlite:///file:{raw_path}?mode=ro&uri=true",
+            f"sqlite:///file:{raw_path}?mode=ro&immutable=1&uri=true",
             connect_args=connect_args,
         )
     else:
@@ -258,7 +266,21 @@ def create_app(config=None) -> FastAPI:
         try:
             yield db
         finally:
-            db.close()
+            # Mask KeyboardInterrupt / GeneratorExit during close so that a
+            # Ctrl-C landing inside pysqlite's connection teardown cannot leave
+            # a stale lock or hot journal on Lustre (the root cause of the
+            # 2026-05-29 lock-storm incident).
+            try:
+                db.close()
+            except BaseException:
+                # Last-resort: forcibly detach the underlying DBAPI connection
+                # from SQLAlchemy so the connection pool doesn't hand out a
+                # half-closed connection on the next request.
+                try:
+                    db.bind.raw_connection().close()
+                except Exception:
+                    pass
+                raise
 
     # ---- cached PBS score config (loaded lazily on first request) ----
     _score_config: dict[str, Any] = {}  # {"formula": str|None, "loaded": bool}
@@ -1430,7 +1452,15 @@ def create_app(config=None) -> FastAPI:
                                 allocation_type=[], allocation_type_exclude=[],
                             )
                     finally:
-                        db.close()
+                        # Same interrupt-safe teardown as get_db() above.
+                        try:
+                            db.close()
+                        except BaseException:
+                            try:
+                                db.bind.raw_connection().close()
+                            except Exception:
+                                pass
+                            raise
                     log.info("cache prewarm: done %s days=%d freq=%s group=%s",
                              endpoint, days_val, eff_freq, group)
                 except Exception as exc:
