@@ -367,8 +367,11 @@ createApp({
                     scales: {
                         x: { type: 'linear', ticks: { color: '#94a3b8' }, grid: { color: '#2d3748' },
                              title: { display: true, text: xLabel, color: '#94a3b8' } },
-                        y: { ticks: { color: '#94a3b8' }, grid: { color: '#2d3748' },
-                             title: { display: true, text: 'Score at run start', color: '#94a3b8' } },
+                        y: { type: 'logarithmic',
+                             ticks: { color: '#94a3b8',
+                                      callback: (v) => Number.isInteger(Math.log10(v)) ? v.toLocaleString() : '' },
+                             grid: { color: '#2d3748' },
+                             title: { display: true, text: 'Score at run start (log scale)', color: '#94a3b8' } },
                     },
                 },
             });
