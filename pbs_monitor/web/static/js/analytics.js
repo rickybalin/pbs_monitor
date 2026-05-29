@@ -9,9 +9,17 @@ const ANALYTICS_PALETTE = [
     '#fbbf24','#22d3ee','#a3e635','#fda4af','#c084fc',
 ];
 
-function colorFor(groupName, sortedGroups) {
-    const idx = sortedGroups.indexOf(groupName);
-    return ANALYTICS_PALETTE[((idx >= 0 ? idx : 0)) % ANALYTICS_PALETTE.length];
+// Stable color assignment: the same queue name always gets the same
+// color regardless of which groups appear in each chart.  We build a
+// global registry so the first chart rendered claims palette slots in
+// sorted order, and later charts reuse those assignments.
+const _colorRegistry = {};
+let _nextSlot = 0;
+function colorFor(groupName, _sortedGroups) {
+    if (!(groupName in _colorRegistry)) {
+        _colorRegistry[groupName] = _nextSlot++;
+    }
+    return ANALYTICS_PALETTE[_colorRegistry[groupName] % ANALYTICS_PALETTE.length];
 }
 
 function fmtBin(iso, freq) {
@@ -205,6 +213,12 @@ createApp({
                 // Filter depth: drop queues with negligible total
                 const dFiltered = filterSmallGroups(dData.series, dData.groups, DEPTH_MIN_NODE_HOURS);
                 dData.series = dFiltered.series; dData.groups = dFiltered.groups;
+
+                // Pre-register all groups from both charts so colors
+                // are assigned in a single sorted pass and stay
+                // consistent across the utilization and depth plots.
+                const allGroups = [...new Set([...uData.groups, ...dData.groups])].sort();
+                allGroups.forEach(g => colorFor(g));
 
                 renderLineChart('util',  uData, '%', '/ capacity', true);
                 renderLineChart('depth', dData, 'system-hours', 'queued backlog', true);
