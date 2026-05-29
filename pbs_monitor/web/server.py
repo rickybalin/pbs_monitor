@@ -1230,17 +1230,15 @@ def create_app(config=None) -> FastAPI:
         total_nodes = _get_total_nodes(db)
 
         def _compute():
-            # Extend lookback by max PBS walltime (7 days) so jobs that were
-            # queued before the window but hadn't started yet are included.
-            fetch_start = window_start - timedelta(days=7)
+            # Match CLI behaviour: only include jobs that actually
+            # started (start_time IS NOT NULL).  Jobs that were
+            # submitted but never ran (cancelled/deleted) would
+            # otherwise be treated as queued from submission to now,
+            # massively inflating the backlog numbers.
             q = db.query(Job).filter(
-                Job.submit_time < last_complete,
+                Job.start_time.isnot(None),
                 Job.submit_time.isnot(None),
-                Job.submit_time >= fetch_start,
-                or_(
-                    Job.start_time.is_(None),
-                    Job.start_time >= window_start,
-                ),
+                Job.start_time >= window_start,
                 Job.walltime.isnot(None),
                 Job.nodes > 0,
             )
@@ -1256,6 +1254,7 @@ def create_app(config=None) -> FastAPI:
 
             groups: dict[str, list[float]] = {}
 
+            now = datetime.now()
             for job in jobs:
                 grp = getattr(job, group_by, None) or 'unknown'
                 if grp not in groups:
@@ -1269,14 +1268,19 @@ def create_app(config=None) -> FastAPI:
                 sta = job.start_time
                 if sub and sub.tzinfo: sub = sub.replace(tzinfo=None)
                 if sta and sta.tzinfo: sta = sta.replace(tzinfo=None)
+                # For jobs that haven't started yet, treat start as
+                # "now" so they count as queued up to the present
+                # (matches CLI usage-insights behaviour).
+                effective_sta = sta if sta is not None else now
                 for i, t in enumerate(bins):
                     nt = _next_bin(t, eff_freq)
                     # Job was queued during bin [t, nt) if:
                     #   - submitted before the bin ended, AND
-                    #   - not yet started, OR started at/after the bin ended
+                    #   - still queued at or after the bin start
+                    #     (started at/after t, or hasn't started)
                     queued_during = (
                         sub < nt and
-                        (sta is None or sta >= nt)
+                        effective_sta >= t
                     )
                     if queued_during:
                         groups[grp][i] += nh
