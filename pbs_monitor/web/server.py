@@ -219,56 +219,6 @@ def _build_node_index(db: Session) -> tuple[list[str], list[int]]:
 # App factory — called by the CLI `web` command
 # ---------------------------------------------------------------------------
 
-def _check_daemon_colocation(pid_file: Path, log) -> None:
-    """Verify the web server is running on the same node as the daemon.
-
-    When the database is in WAL mode, SQLite's WAL locking protocol relies on
-    shared memory (the -shm sidecar file).  That only works correctly when all
-    processes share the same OS page cache — i.e. the same physical node.
-    On a shared filesystem like Lustre/Flare, running the daemon and the web
-    server on *different* login nodes will silently corrupt WAL coordination.
-
-    We reuse the existing PID file (JSON, written by the daemon at startup)
-    which already contains a ``hostname`` field.  If the file is absent the
-    daemon is not running and we warn but allow startup.  If the hostnames
-    differ we abort immediately with a clear error.
-    """
-    import json as _json_local
-
-    my_host = socket.gethostname()
-
-    if not pid_file.exists():
-        log.warning(
-            "Daemon PID file not found (%s) — cannot verify node co-location. "
-            "Ensure the daemon is started before enabling WAL mode.",
-            pid_file,
-        )
-        return
-
-    try:
-        with open(pid_file) as fh:
-            info = _json_local.load(fh)
-    except Exception as exc:
-        log.warning("Could not read daemon PID file %s: %s", pid_file, exc)
-        return
-
-    daemon_host = info.get("hostname", "")
-    if not daemon_host:
-        log.warning("Daemon PID file has no hostname field — skipping co-location check.")
-        return
-
-    if daemon_host != my_host:
-        raise RuntimeError(
-            f"Node mismatch: daemon is running on '{daemon_host}' but this web "
-            f"server is starting on '{my_host}'. "
-            "With WAL mode enabled both processes must run on the same login node "
-            "so they share the same SQLite -shm file. "
-            f"Start the web server on '{daemon_host}' instead, or restart the "
-            "daemon on this node first."
-        )
-
-    log.info("Node co-location check passed: daemon and web server both on '%s'.", my_host)
-
 
 def create_app(config=None) -> FastAPI:
     """Create and configure the FastAPI application."""
@@ -282,20 +232,20 @@ def create_app(config=None) -> FastAPI:
     if db_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
         connect_args["timeout"] = 60
-        # Open in URI/read-only + immutable mode:
-        #   mode=ro   — no write locks acquired, bypasses SQLite's write-lock
-        #               entirely (critical on Lustre where the collector holds
-        #               frequent write locks).
-        #   immutable=1 — tells SQLite the DB file will not change underneath
-        #               this connection, allowing it to skip shared-cache locks
-        #               on compatible SQLite builds. Safe here because we never
-        #               write from the web server.
-        # Together these ensure the web server can never contribute to the
-        # lock-storm that occurred on 2026-05-29 when a Ctrl-C during
-        # connection teardown left a stale lock on Lustre/Flare.
+        # Open in URI/read-only mode (mode=ro):
+        #   - SQLite never attempts a write, BEGIN IMMEDIATE, or PENDING/RESERVED
+        #     lock, so the web server cannot contribute to lock contention against
+        #     the daemon on Lustre/Flare (root cause of the 2026-05-29 incident).
+        #   - mode=ro still takes a brief SHARED lock per read transaction, which
+        #     is compatible with the daemon's PENDING/RESERVED locks; readers and
+        #     the daemon block each other only at the daemon's EXCLUSIVE commit
+        #     moment, which is expected and transient.
+        #   - immutable=1 is intentionally NOT set: it disables change detection
+        #     and page-cache invalidation, which would cause the web server to
+        #     serve stale or internally inconsistent data while the daemon writes.
         raw_path = db_url.replace("sqlite:///", "")
         engine = create_engine(
-            f"sqlite:///file:{raw_path}?mode=ro&immutable=1&uri=true",
+            f"sqlite:///file:{raw_path}?mode=ro&uri=true",
             connect_args=connect_args,
         )
     else:
@@ -324,11 +274,11 @@ def create_app(config=None) -> FastAPI:
             try:
                 db.close()
             except BaseException:
-                # Last-resort: forcibly detach the underlying DBAPI connection
-                # from SQLAlchemy so the connection pool doesn't hand out a
-                # half-closed connection on the next request.
+                # Interrupt landed during teardown. Mark this session's
+                # connection as broken so SQLAlchemy's pool discards it
+                # rather than handing it out again.
                 try:
-                    db.bind.raw_connection().close()
+                    db.invalidate()
                 except Exception:
                     pass
                 raise
@@ -1460,14 +1410,6 @@ def create_app(config=None) -> FastAPI:
         import logging
         log = logging.getLogger(__name__)
 
-        # --- WAL node co-location check ---
-        # Must run before any DB access.  Raises RuntimeError (aborts startup)
-        # if the daemon is on a different node.  Only meaningful for SQLite;
-        # non-SQLite backends skip it.
-        if db_url.startswith("sqlite"):
-            pid_file = Path.home() / ".pbs_monitor_daemon.pid"
-            _check_daemon_colocation(pid_file, log)
-
         async def _warm(days_val: int, freq_val: str, group: str) -> None:
             now = datetime.now()
             eff_freq = freq_val
@@ -1516,7 +1458,7 @@ def create_app(config=None) -> FastAPI:
                             db.close()
                         except BaseException:
                             try:
-                                db.bind.raw_connection().close()
+                                db.invalidate()
                             except Exception:
                                 pass
                             raise
