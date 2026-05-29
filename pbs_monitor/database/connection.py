@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from typing import Dict, Optional, Any, Generator
 from pathlib import Path
 
-from sqlalchemy import create_engine, event, MetaData, inspect, text
+from sqlalchemy import create_engine, MetaData, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
@@ -108,18 +108,6 @@ class DatabaseManager:
         logger.debug(f"Initializing database connection to: {self._mask_url(database_url)}")
         
         self.engine = create_engine(database_url, **engine_options)
-
-        # Enable WAL journal mode for SQLite so readers never block
-        # writers and vice-versa.  Without this the long-running
-        # analytics queries on the web server hold a shared lock that
-        # starves the collector's writes.
-        if database_url.startswith('sqlite:'):
-            @event.listens_for(self.engine, 'connect')
-            def _set_sqlite_pragmas(dbapi_conn, connection_record):
-                cursor = dbapi_conn.cursor()
-                cursor.execute('PRAGMA journal_mode=WAL')
-                cursor.close()
-
         self.session_factory = sessionmaker(bind=self.engine)
         self._initialized = True
         
