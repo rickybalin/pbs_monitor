@@ -54,7 +54,7 @@ function collapseResvGroups(series, groups) {
 }
 
 // Filter out groups whose total node-hours across all bins is below a threshold
-const DEPTH_MIN_NODE_HOURS = 100;   // hide queues with < 100 total node-hours
+const DEPTH_MIN_NODE_HOURS = 0;     // show all queues (no minimum threshold)
 
 const { createApp, ref, reactive, computed, onMounted } = Vue;
 
@@ -209,7 +209,7 @@ createApp({
                 renderLineChart('util',  uData, '%', '/ capacity', true);
                 renderLineChart('depth', dData, 'system-hours', 'queued backlog', true);
                 utilMeta.value  = `${uData.groups.length} group(s) · ${uData.bins.length} bins · ${uData.total_nodes} compute nodes`;
-                depthMeta.value = `${dData.groups.length} group(s) · ${dData.bins.length} bins · normalized to ${dData.total_nodes} nodes (< ${DEPTH_MIN_NODE_HOURS} system-hours hidden)`;
+                depthMeta.value = `${dData.groups.length} group(s) · ${dData.bins.length} bins · normalized to ${dData.total_nodes} nodes`;
                 lastRefresh.value = new Date().toLocaleTimeString();
             } catch (e) {
                 console.error(e);
