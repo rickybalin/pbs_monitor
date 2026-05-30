@@ -263,7 +263,7 @@
             <span v-if="prefetching && !loading" style="color:var(--text-dim);font-size:0.75rem;opacity:0.6">prefetching…</span>
             <span v-if="error"       style="color:#f87171;font-size:0.8rem">{{ error }}</span>
         </div>
-        <a href="/" class="lb-back-link">← Dashboard</a>
+        <button class="lb-back-link" onclick="window.close()" style="background:none;border:none;cursor:pointer;">✕ Close Tab</button>
     </header>
 
     <div class="lb-container">
