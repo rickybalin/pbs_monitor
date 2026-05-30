@@ -226,6 +226,7 @@
                                 <th>Queue</th>
                                 <th>Nodes</th>
                                 <th>Walltime</th>
+                                <th>Queued Time</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -239,9 +240,10 @@
                                 <td><span class="queue-badge" :style="{ backgroundColor: queueColor(job.queue) }">{{ job.queue }}</span></td>
                                 <td>{{ job.nodes }}</td>
                                 <td>{{ job.walltime }}</td>
+                                <td>{{ fmtDuration(job.queue_time_seconds) }}</td>
                             </tr>
                             <tr v-if="sortedHeldJobs.length === 0">
-                                <td colspan="7" class="empty-row">No held jobs</td>
+                                <td colspan="8" class="empty-row">No held jobs</td>
                             </tr>
                         </tbody>
                     </table>

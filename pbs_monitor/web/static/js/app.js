@@ -276,13 +276,7 @@ createApp({
 
         const sortedHeldJobs = computed(() => {
             const list = snapshot.value?.jobs?.held || [];
-            return [...list].sort((a, b) => {
-                let va = a['job_id'] ?? '';
-                let vb = b['job_id'] ?? '';
-                if (typeof va === 'string') va = va.toLowerCase();
-                if (typeof vb === 'string') vb = vb.toLowerCase();
-                return va < vb ? -1 : va > vb ? 1 : 0;
-            });
+            return [...list].sort((a, b) => (b.queue_time_seconds ?? 0) - (a.queue_time_seconds ?? 0));
         });
 
         const filteredHeldJobs = computed(() => {
