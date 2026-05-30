@@ -250,17 +250,18 @@
         <div class="lb-header-controls">
             <!-- Window toggle -->
             <div class="btn-group">
-                <button :class="{ active: window === 1  }" @click="setWindow(1)">24h</button>
-                <button :class="{ active: window === 7  }" @click="setWindow(7)">7d</button>
-                <button :class="{ active: window === 30 }" @click="setWindow(30)">30d</button>
+                <button :class="{ active: windowDays === 1  }" @click="setWindow(1)">24h</button>
+                <button :class="{ active: windowDays === 7  }" @click="setWindow(7)">7d</button>
+                <button :class="{ active: windowDays === 30 }" @click="setWindow(30)">30d</button>
             </div>
             <!-- Group-by toggle -->
             <div class="btn-group">
                 <button :class="{ active: groupBy === 'user'    }" @click="setGroupBy('user')">By User</button>
                 <button :class="{ active: groupBy === 'project' }" @click="setGroupBy('project')">By Project</button>
             </div>
-            <span v-if="loading" style="color:var(--text-dim);font-size:0.8rem">Loading…</span>
-            <span v-if="error"   style="color:#f87171;font-size:0.8rem">{{ error }}</span>
+            <span v-if="loading"     style="color:var(--text-dim);font-size:0.8rem">Loading…</span>
+            <span v-if="prefetching && !loading" style="color:var(--text-dim);font-size:0.75rem;opacity:0.6">prefetching…</span>
+            <span v-if="error"       style="color:#f87171;font-size:0.8rem">{{ error }}</span>
         </div>
         <a href="/" class="lb-back-link">← Dashboard</a>
     </header>
@@ -434,7 +435,7 @@
                 <strong>Node-Hours:</strong> includes currently running jobs (elapsed so far) + finished jobs.
                 <strong>Efficiency</strong> = actual runtime ÷ requested walltime, weighted by node-hours,
                 finished jobs only (runtime &gt; 30 min).
-                Window: last <strong>{{ data.window_days }}d</strong>.
+                Window: last <strong>{{ data.window_days === 1 ? '24h' : data.window_days + 'd' }}</strong>.
             </p>
 
         </template>
@@ -446,17 +447,65 @@ const { createApp, ref, computed, onMounted } = Vue;
 
 createApp({
     setup() {
-        const window   = ref(7);
-        const groupBy  = ref('user');
-        const data     = ref(null);
-        const loading  = ref(false);
-        const error    = ref(null);
+        const windowDays = ref(7);
+        const groupBy    = ref('user');
+        const data       = ref(null);
+        const loading    = ref(false);   // true only on initial page load
+        const prefetching = ref(false);  // true while background fetches are running
+        const error      = ref(null);
+
+        // Cache: key = `${window}:${groupBy}` → response data
+        const cache = {};
+        // Track in-flight fetches so we don't double-fetch the same combo
+        const inflight = {};
 
         const groupByLabel = computed(() => groupBy.value === 'user' ? 'User' : 'Project');
 
-        const maxNHTop  = computed(() => data.value ? Math.max(...data.value.node_hours.top.map(r => r.node_hours), 1) : 1);
-        const totalNH   = computed(() => data.value ? data.value.node_hours.top.length + data.value.node_hours.bottom.length : 0);
-        const totalEff  = computed(() => data.value ? data.value.efficiency.top.length + data.value.efficiency.bottom.length : 0);
+        const maxNHTop = computed(() => data.value ? Math.max(...data.value.node_hours.top.map(r => r.node_hours), 1) : 1);
+        const totalNH  = computed(() => data.value ? data.value.node_hours.top.length + data.value.node_hours.bottom.length : 0);
+        const totalEff = computed(() => data.value ? data.value.efficiency.top.length + data.value.efficiency.bottom.length : 0);
+
+        function cacheKey(w, g) { return `${w}:${g}`; }
+
+        async function fetchOne(w, g) {
+            const key = cacheKey(w, g);
+            if (cache[key]) return cache[key];
+            if (inflight[key]) return inflight[key];  // reuse in-flight promise
+            const promise = fetch(`/api/leaderboard?window=${w}&group_by=${g}`)
+                .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
+                .then(json => { cache[key] = json; delete inflight[key]; return json; })
+                .catch(err => { delete inflight[key]; throw err; });
+            inflight[key] = promise;
+            return promise;
+        }
+
+        async function fetchData(showSpinner = false) {
+            if (showSpinner) loading.value = true;
+            error.value = null;
+            try {
+                data.value = await fetchOne(windowDays.value, groupBy.value);
+            } catch (e) {
+                error.value = e.message;
+            } finally {
+                if (showSpinner) loading.value = false;
+            }
+        }
+
+        // Pre-fetch all 6 combinations in the background after initial load.
+        async function prefetchAll() {
+            prefetching.value = true;
+            const windows = [1, 7, 30];
+            const groups  = ['user', 'project'];
+            const jobs = [];
+            for (const w of windows) {
+                for (const g of groups) {
+                    if (cacheKey(w, g) === cacheKey(windowDays.value, groupBy.value)) continue;
+                    jobs.push(fetchOne(w, g).catch(() => {}));  // swallow errors; best-effort
+                }
+            }
+            await Promise.all(jobs);
+            prefetching.value = false;
+        }
 
         function pct(val, max) {
             if (!max) return 0;
@@ -482,34 +531,28 @@ createApp({
                 : `/page/project/${encodeURIComponent(name)}`;
         }
 
-        async function fetchData() {
-            loading.value = true;
-            error.value   = null;
-            try {
-                const res = await fetch(`/api/leaderboard?window=${window.value}&group_by=${groupBy.value}`);
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                data.value = await res.json();
-            } catch (e) {
-                error.value = e.message;
-            } finally {
-                loading.value = false;
-            }
+        async function setWindow(w) {
+            windowDays.value = w;
+            // Show cached data immediately if available, otherwise wait
+            const key = cacheKey(w, groupBy.value);
+            if (cache[key]) { data.value = cache[key]; return; }
+            await fetchData(true);
         }
 
-        function setWindow(w) {
-            window.value = w;
-            fetchData();
-        }
-
-        function setGroupBy(g) {
+        async function setGroupBy(g) {
             groupBy.value = g;
-            fetchData();
+            const key = cacheKey(windowDays.value, g);
+            if (cache[key]) { data.value = cache[key]; return; }
+            await fetchData(true);
         }
 
-        onMounted(fetchData);
+        onMounted(async () => {
+            await fetchData(true);   // load initial view with spinner
+            prefetchAll();           // kick off background pre-fetch, don't await
+        });
 
         return {
-            window, groupBy, data, loading, error,
+            windowDays, groupBy, data, loading, prefetching, error,
             groupByLabel, maxNHTop, totalNH, totalEff,
             pct, fmtNH, rankClass, nameLink,
             setWindow, setGroupBy,
