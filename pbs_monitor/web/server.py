@@ -1414,6 +1414,115 @@ def create_app(config=None) -> FastAPI:
     async def serve_analytics():
         return FileResponse(STATIC_DIR / "analytics.html")
 
+    @app.get("/leaderboard")
+    async def serve_leaderboard():
+        return FileResponse(STATIC_DIR / "leaderboard.html")
+
+    @app.get("/api/leaderboard")
+    async def api_leaderboard(
+        window: int = Query(default=7, description="Time window in days (1, 7, or 30)"),
+        group_by: str = Query(default="user", description="Group by 'user' or 'project'"),
+        db: Session = Depends(get_db),
+    ):
+        """Leaderboard: top/bottom 10 by node-hours and efficiency.
+
+        Node-hours: RUNNING (elapsed so far) + FINISHED jobs where runtime > 30min.
+        Efficiency: FINISHED jobs only, runtime > 30min. Weighted by node-hours:
+            efficiency = sum(actual_runtime * nodes) / sum(walltime_seconds * nodes)
+        """
+        MIN_RUNTIME_SEC = 1800  # 30 minutes
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=window)
+
+        group_col = Job.owner if group_by == "user" else Job.project
+
+        def _fetch():
+            # ── node-hours: RUNNING (elapsed) + FINISHED (actual runtime > 30min) ──
+            nh_map: dict[str, float] = {}
+
+            # Running jobs – elapsed node-hours so far
+            running = (
+                db.query(Job)
+                .filter(
+                    Job.state == JobState.RUNNING,
+                    Job.start_time.isnot(None),
+                    Job.start_time >= cutoff,
+                )
+                .all()
+            )
+            for job in running:
+                st = job.start_time
+                if st.tzinfo is None:
+                    st = st.replace(tzinfo=timezone.utc)
+                elapsed = (now - st).total_seconds()
+                if elapsed < MIN_RUNTIME_SEC:
+                    continue
+                key = (job.owner if group_by == "user" else job.project) or "unknown"
+                nodes = job.nodes or 1
+                nh_map[key] = nh_map.get(key, 0.0) + elapsed * nodes / 3600.0
+
+            # Finished jobs – actual_runtime_seconds, runtime > 30min
+            finished = (
+                db.query(Job)
+                .filter(
+                    Job.state == JobState.FINISHED,
+                    Job.end_time >= cutoff,
+                    Job.actual_runtime_seconds > MIN_RUNTIME_SEC,
+                )
+                .all()
+            )
+
+            # ── efficiency: finished jobs only ──
+            # Weighted: sum(actual * nodes) / sum(walltime * nodes)
+            eff_actual: dict[str, float] = {}   # sum of actual_runtime * nodes
+            eff_requested: dict[str, float] = {}  # sum of walltime_seconds * nodes
+
+            for job in finished:
+                key = (job.owner if group_by == "user" else job.project) or "unknown"
+                nodes = job.nodes or 1
+                actual = job.actual_runtime_seconds or 0
+                nh_map[key] = nh_map.get(key, 0.0) + actual * nodes / 3600.0
+
+                # Efficiency denominator: walltime_seconds
+                wall = _parse_walltime(job.walltime)
+                if wall and wall > 0:
+                    eff_actual[key]     = eff_actual.get(key, 0.0)     + actual * nodes
+                    eff_requested[key]  = eff_requested.get(key, 0.0)  + wall   * nodes
+
+            # Build unified records
+            all_keys = set(nh_map) | set(eff_actual)
+            records = []
+            for key in all_keys:
+                nh = nh_map.get(key, 0.0)
+                req = eff_requested.get(key, 0.0)
+                act = eff_actual.get(key, 0.0)
+                eff = round(act / req * 100, 1) if req > 0 else None
+                records.append({
+                    "name": key,
+                    "node_hours": round(nh, 1),
+                    "efficiency": eff,  # percent, or null if no finished jobs
+                })
+
+            # Sort helpers
+            by_nh   = sorted(records, key=lambda r: r["node_hours"],            reverse=True)
+            eff_only = [r for r in records if r["efficiency"] is not None]
+            by_eff  = sorted(eff_only,  key=lambda r: r["efficiency"],           reverse=True)
+
+            return {
+                "window_days": window,
+                "group_by": group_by,
+                "node_hours": {
+                    "top":    by_nh[:10],
+                    "bottom": by_nh[-10:][::-1] if len(by_nh) > 10 else [],
+                },
+                "efficiency": {
+                    "top":    by_eff[:10],
+                    "bottom": by_eff[-10:][::-1] if len(by_eff) > 10 else [],
+                },
+            }
+
+        return await asyncio.get_event_loop().run_in_executor(None, _fetch)
+
     app.mount("/css", StaticFiles(directory=str(STATIC_DIR / "css")), name="css")
     app.mount("/js", StaticFiles(directory=str(STATIC_DIR / "js")), name="js")
 

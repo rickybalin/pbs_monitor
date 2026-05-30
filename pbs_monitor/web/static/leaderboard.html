@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PBS Monitor — Leaderboard</title>
+    <link rel="stylesheet" href="css/dashboard.css">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <style>
+        /* ── Leaderboard-specific styles ── */
+        .lb-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 1rem 1.5rem 3rem;
+        }
+
+        .lb-header {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            padding: 0 1.5rem;
+            height: var(--header-height);
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--accent-border);
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,.3);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .lb-header h1 {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--text-color);
+            white-space: nowrap;
+        }
+
+        .lb-header-controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex: 1;
+        }
+
+        .lb-back-link {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.85rem;
+            white-space: nowrap;
+        }
+        .lb-back-link:hover { color: var(--text-color); }
+
+        /* Toggle button groups */
+        .btn-group {
+            display: flex;
+            gap: 0;
+            border: 1px solid var(--accent-border);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .btn-group button {
+            background: transparent;
+            border: none;
+            border-right: 1px solid var(--accent-border);
+            color: var(--text-dim);
+            padding: 0.35rem 0.9rem;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: background 0.15s, color 0.15s;
+        }
+        .btn-group button:last-child { border-right: none; }
+        .btn-group button.active {
+            background: #3b82f6;
+            color: #fff;
+        }
+        .btn-group button:hover:not(.active) {
+            background: rgba(255,255,255,0.06);
+            color: var(--text-color);
+        }
+
+        /* Section layout */
+        .lb-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+        @media (max-width: 900px) {
+            .lb-grid { grid-template-columns: 1fr; }
+        }
+
+        .lb-card {
+            background: var(--panel-bg);
+            border: 1px solid var(--accent-border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .lb-card-header {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--accent-border);
+            display: flex;
+            align-items: baseline;
+            gap: 0.6rem;
+        }
+        .lb-card-header h2 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-color);
+        }
+        .lb-card-header .lb-subtitle {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+        }
+        .lb-top-badge {
+            background: #f59e0b22;
+            color: #f59e0b;
+            border: 1px solid #f59e0b44;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            padding: 0.1rem 0.45rem;
+            font-weight: 600;
+            margin-left: auto;
+        }
+        .lb-bottom-badge {
+            background: #ef444422;
+            color: #ef4444;
+            border: 1px solid #ef444444;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            padding: 0.1rem 0.45rem;
+            font-weight: 600;
+            margin-left: auto;
+        }
+
+        /* Leaderboard table */
+        .lb-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
+        }
+        .lb-table th {
+            padding: 0.45rem 0.75rem;
+            text-align: left;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            border-bottom: 1px solid var(--accent-border);
+            background: rgba(0,0,0,0.15);
+        }
+        .lb-table th.right, .lb-table td.right { text-align: right; }
+        .lb-table td {
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            color: var(--text-color);
+        }
+        .lb-table tr:last-child td { border-bottom: none; }
+        .lb-table tr:hover td { background: rgba(255,255,255,0.03); }
+
+        .lb-rank {
+            color: var(--text-dim);
+            font-size: 0.75rem;
+            width: 2rem;
+            text-align: center;
+        }
+        .lb-rank-gold   { color: #f59e0b; font-weight: 700; }
+        .lb-rank-silver { color: #94a3b8; font-weight: 700; }
+        .lb-rank-bronze { color: #b45309; font-weight: 700; }
+
+        .lb-name {
+            font-weight: 500;
+            max-width: 180px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .lb-name a {
+            color: var(--text-color);
+            text-decoration: none;
+        }
+        .lb-name a:hover { color: #60a5fa; text-decoration: underline; }
+
+        .lb-value {
+            font-variant-numeric: tabular-nums;
+            font-weight: 500;
+        }
+        .lb-value-top    { color: #34d399; }
+        .lb-value-bottom { color: #f87171; }
+
+        /* Bar mini-viz */
+        .lb-bar-wrap {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .lb-bar-bg {
+            flex: 1;
+            height: 6px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 3px;
+            overflow: hidden;
+            min-width: 60px;
+        }
+        .lb-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.4s ease;
+        }
+        .lb-bar-fill.top    { background: #3b82f6; }
+        .lb-bar-fill.bottom { background: #ef4444; }
+        .lb-bar-fill.eff-top    { background: #34d399; }
+        .lb-bar-fill.eff-bottom { background: #f87171; }
+
+        .lb-null { color: var(--text-dim); font-style: italic; }
+
+        .lb-loading, .lb-empty {
+            padding: 2rem;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+        }
+
+        .lb-section-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin: 2rem 0 0.75rem;
+            padding-bottom: 0.4rem;
+            border-bottom: 1px solid var(--accent-border);
+        }
+
+        .lb-footnote {
+            margin-top: 2rem;
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            line-height: 1.6;
+        }
+        .lb-footnote strong { color: var(--text-color); }
+    </style>
+</head>
+<body>
+<div id="app">
+    <!-- Header -->
+    <header class="lb-header">
+        <h1>🏆 Leaderboard</h1>
+        <div class="lb-header-controls">
+            <!-- Window toggle -->
+            <div class="btn-group">
+                <button :class="{ active: window === 1  }" @click="setWindow(1)">24h</button>
+                <button :class="{ active: window === 7  }" @click="setWindow(7)">7d</button>
+                <button :class="{ active: window === 30 }" @click="setWindow(30)">30d</button>
+            </div>
+            <!-- Group-by toggle -->
+            <div class="btn-group">
+                <button :class="{ active: groupBy === 'user'    }" @click="setGroupBy('user')">By User</button>
+                <button :class="{ active: groupBy === 'project' }" @click="setGroupBy('project')">By Project</button>
+            </div>
+            <span v-if="loading" style="color:var(--text-dim);font-size:0.8rem">Loading…</span>
+            <span v-if="error"   style="color:#f87171;font-size:0.8rem">{{ error }}</span>
+        </div>
+        <a href="/" class="lb-back-link">← Dashboard</a>
+    </header>
+
+    <div class="lb-container">
+        <div v-if="loading && !data" class="lb-loading">Loading leaderboard…</div>
+        <template v-else-if="data">
+
+            <!-- ── Node-Hours ── -->
+            <div class="lb-section-title">Node-Hours Consumed</div>
+            <div class="lb-grid">
+                <!-- Top 10 node-hours -->
+                <div class="lb-card">
+                    <div class="lb-card-header">
+                        <h2>Top 10</h2>
+                        <span class="lb-subtitle">most node-hours</span>
+                        <span class="lb-top-badge">▲ highest</span>
+                    </div>
+                    <div v-if="data.node_hours.top.length === 0" class="lb-empty">No data for this window.</div>
+                    <table v-else class="lb-table">
+                        <thead>
+                            <tr>
+                                <th class="lb-rank">#</th>
+                                <th>{{ groupByLabel }}</th>
+                                <th class="right">Node-Hours</th>
+                                <th style="width:120px"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(row, i) in data.node_hours.top" :key="row.name">
+                                <td class="lb-rank" :class="rankClass(i)">{{ i + 1 }}</td>
+                                <td class="lb-name">
+                                    <a :href="nameLink(row.name)" target="_blank">{{ row.name || '—' }}</a>
+                                </td>
+                                <td class="right lb-value lb-value-top">{{ fmtNH(row.node_hours) }}</td>
+                                <td>
+                                    <div class="lb-bar-wrap">
+                                        <div class="lb-bar-bg">
+                                            <div class="lb-bar-fill top"
+                                                 :style="{ width: pct(row.node_hours, maxNHTop) + '%' }"></div>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Bottom 10 node-hours -->
+                <div class="lb-card">
+                    <div class="lb-card-header">
+                        <h2>Bottom 10</h2>
+                        <span class="lb-subtitle">fewest node-hours</span>
+                        <span class="lb-bottom-badge">▼ lowest</span>
+                    </div>
+                    <div v-if="data.node_hours.bottom.length === 0" class="lb-empty">Not enough entries.</div>
+                    <table v-else class="lb-table">
+                        <thead>
+                            <tr>
+                                <th class="lb-rank">#</th>
+                                <th>{{ groupByLabel }}</th>
+                                <th class="right">Node-Hours</th>
+                                <th style="width:120px"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(row, i) in data.node_hours.bottom" :key="row.name">
+                                <td class="lb-rank">{{ totalNH - i }}</td>
+                                <td class="lb-name">
+                                    <a :href="nameLink(row.name)" target="_blank">{{ row.name || '—' }}</a>
+                                </td>
+                                <td class="right lb-value lb-value-bottom">{{ fmtNH(row.node_hours) }}</td>
+                                <td>
+                                    <div class="lb-bar-wrap">
+                                        <div class="lb-bar-bg">
+                                            <div class="lb-bar-fill bottom"
+                                                 :style="{ width: pct(row.node_hours, maxNHTop) + '%' }"></div>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ── Efficiency ── -->
+            <div class="lb-section-title">Walltime Efficiency</div>
+            <div class="lb-grid">
+                <!-- Top 10 efficiency -->
+                <div class="lb-card">
+                    <div class="lb-card-header">
+                        <h2>Top 10</h2>
+                        <span class="lb-subtitle">best walltime prediction</span>
+                        <span class="lb-top-badge">▲ highest</span>
+                    </div>
+                    <div v-if="data.efficiency.top.length === 0" class="lb-empty">No completed jobs in this window.</div>
+                    <table v-else class="lb-table">
+                        <thead>
+                            <tr>
+                                <th class="lb-rank">#</th>
+                                <th>{{ groupByLabel }}</th>
+                                <th class="right">Efficiency</th>
+                                <th style="width:120px"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(row, i) in data.efficiency.top" :key="row.name">
+                                <td class="lb-rank" :class="rankClass(i)">{{ i + 1 }}</td>
+                                <td class="lb-name">
+                                    <a :href="nameLink(row.name)" target="_blank">{{ row.name || '—' }}</a>
+                                </td>
+                                <td class="right lb-value lb-value-top">
+                                    {{ row.efficiency != null ? row.efficiency + '%' : '—' }}
+                                </td>
+                                <td>
+                                    <div class="lb-bar-wrap">
+                                        <div class="lb-bar-bg">
+                                            <div class="lb-bar-fill eff-top"
+                                                 :style="{ width: (row.efficiency ?? 0) + '%' }"></div>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Bottom 10 efficiency -->
+                <div class="lb-card">
+                    <div class="lb-card-header">
+                        <h2>Bottom 10</h2>
+                        <span class="lb-subtitle">worst walltime prediction</span>
+                        <span class="lb-bottom-badge">▼ lowest</span>
+                    </div>
+                    <div v-if="data.efficiency.bottom.length === 0" class="lb-empty">Not enough entries.</div>
+                    <table v-else class="lb-table">
+                        <thead>
+                            <tr>
+                                <th class="lb-rank">#</th>
+                                <th>{{ groupByLabel }}</th>
+                                <th class="right">Efficiency</th>
+                                <th style="width:120px"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(row, i) in data.efficiency.bottom" :key="row.name">
+                                <td class="lb-rank">{{ totalEff - i }}</td>
+                                <td class="lb-name">
+                                    <a :href="nameLink(row.name)" target="_blank">{{ row.name || '—' }}</a>
+                                </td>
+                                <td class="right lb-value lb-value-bottom">
+                                    {{ row.efficiency != null ? row.efficiency + '%' : '—' }}
+                                </td>
+                                <td>
+                                    <div class="lb-bar-wrap">
+                                        <div class="lb-bar-bg">
+                                            <div class="lb-bar-fill eff-bottom"
+                                                 :style="{ width: (row.efficiency ?? 0) + '%' }"></div>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Footnote -->
+            <p class="lb-footnote">
+                <strong>Node-Hours:</strong> includes currently running jobs (elapsed so far) + finished jobs.
+                <strong>Efficiency</strong> = actual runtime ÷ requested walltime, weighted by node-hours,
+                finished jobs only (runtime &gt; 30 min).
+                Window: last <strong>{{ data.window_days }}d</strong>.
+            </p>
+
+        </template>
+    </div>
+</div>
+
+<script>
+const { createApp, ref, computed, onMounted } = Vue;
+
+createApp({
+    setup() {
+        const window   = ref(7);
+        const groupBy  = ref('user');
+        const data     = ref(null);
+        const loading  = ref(false);
+        const error    = ref(null);
+
+        const groupByLabel = computed(() => groupBy.value === 'user' ? 'User' : 'Project');
+
+        const maxNHTop  = computed(() => data.value ? Math.max(...data.value.node_hours.top.map(r => r.node_hours), 1) : 1);
+        const totalNH   = computed(() => data.value ? data.value.node_hours.top.length + data.value.node_hours.bottom.length : 0);
+        const totalEff  = computed(() => data.value ? data.value.efficiency.top.length + data.value.efficiency.bottom.length : 0);
+
+        function pct(val, max) {
+            if (!max) return 0;
+            return Math.max(2, (val / max * 100)).toFixed(1);
+        }
+
+        function fmtNH(v) {
+            if (v == null) return '—';
+            if (v >= 1000) return (v / 1000).toFixed(1) + 'k';
+            return v.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+        }
+
+        function rankClass(i) {
+            if (i === 0) return 'lb-rank-gold';
+            if (i === 1) return 'lb-rank-silver';
+            if (i === 2) return 'lb-rank-bronze';
+            return '';
+        }
+
+        function nameLink(name) {
+            return groupBy.value === 'user'
+                ? `/page/user/${encodeURIComponent(name)}`
+                : `/page/project/${encodeURIComponent(name)}`;
+        }
+
+        async function fetchData() {
+            loading.value = true;
+            error.value   = null;
+            try {
+                const res = await fetch(`/api/leaderboard?window=${window.value}&group_by=${groupBy.value}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                data.value = await res.json();
+            } catch (e) {
+                error.value = e.message;
+            } finally {
+                loading.value = false;
+            }
+        }
+
+        function setWindow(w) {
+            window.value = w;
+            fetchData();
+        }
+
+        function setGroupBy(g) {
+            groupBy.value = g;
+            fetchData();
+        }
+
+        onMounted(fetchData);
+
+        return {
+            window, groupBy, data, loading, error,
+            groupByLabel, maxNHTop, totalNH, totalEff,
+            pct, fmtNH, rankClass, nameLink,
+            setWindow, setGroupBy,
+        };
+    }
+}).mount('#app');
+</script>
+</body>
+</html>
