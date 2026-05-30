@@ -435,13 +435,15 @@
                         <div class="modal-field" v-if="jobDetail.actual_runtime_seconds != null"><span class="mf-label">Runtime</span><span class="mf-value">{{ fmtDuration(jobDetail.actual_runtime_seconds) }}</span></div>
                         <div class="modal-field" v-if="jobDetail.walltime_used"><span class="mf-label">Walltime Used</span><span class="mf-value">{{ jobDetail.walltime_used }}</span></div>
                     </div>
-                    <div v-if="jobDetail.elapsed_seconds != null && jobDetail.walltime_seconds" class="modal-progress-container">
+                    <div v-if="jobDetail.walltime_seconds && (jobDetail.elapsed_seconds != null || jobDetail.actual_runtime_seconds != null)" class="modal-progress-container">
                         <div class="modal-progress-bar">
                             <div class="modal-progress-fill"
-                                 :class="{ 'overdue': jobDetail.remaining_seconds <= 0 }"
-                                 :style="{ width: Math.min(100, jobDetail.elapsed_seconds / jobDetail.walltime_seconds * 100).toFixed(1) + '%' }"></div>
+                                 :class="{ 'overdue': jobDetail.remaining_seconds != null && jobDetail.remaining_seconds <= 0 }"
+                                 :style="{ width: Math.min(100, (jobDetail.actual_runtime_seconds ?? jobDetail.elapsed_seconds) / jobDetail.walltime_seconds * 100).toFixed(1) + '%' }"></div>
                         </div>
-                        <span class="modal-progress-label">{{ (jobDetail.elapsed_seconds / jobDetail.walltime_seconds * 100).toFixed(1) }}% of walltime</span>
+                        <span class="modal-progress-label">
+                            {{ ((jobDetail.actual_runtime_seconds ?? jobDetail.elapsed_seconds) / jobDetail.walltime_seconds * 100).toFixed(1) }}% of walltime
+                        </span>
                     </div>
                 </div>
 
