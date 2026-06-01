@@ -913,10 +913,28 @@ canvas {
     font-weight: 700;
     letter-spacing: 0.03em;
 }
-.resv-state-ACTIVE    { background: #065f46; color: #6ee7b7; }
-.resv-state-UPCOMING  { background: #1e3a5f; color: #93c5fd; }
-.resv-state-COMPLETED { background: #1e293b; color: #64748b; }
-.resv-state-CANCELLED { background: #2d1b1b; color: #9c6060; }
+/* Active / running */
+.resv-state-ACTIVE,
+.resv-state-RUNNING,
+.resv-state-RN              { background: #065f46; color: #6ee7b7; }
+/* Upcoming / confirmed */
+.resv-state-UPCOMING,
+.resv-state-CONFIRMED,
+.resv-state-CONFIRMED_SHORT,
+.resv-state-CO              { background: #1e3a5f; color: #93c5fd; }
+/* Degraded / warning */
+.resv-state-DEGRADED,
+.resv-state-DG              { background: #451a03; color: #fb923c; }
+/* Finished / expired */
+.resv-state-COMPLETED,
+.resv-state-FINISHED,
+.resv-state-EXPIRED,
+.resv-state-BD,
+.resv-state-DELETED         { background: #1e293b; color: #64748b; }
+/* Cancelled / unknown */
+.resv-state-CANCELLED,
+.resv-state-UN,
+.resv-state-UNKNOWN         { background: #2d1b1b; color: #9c6060; }
 .resv-empty {
     padding: 1.5rem;
     text-align: center;

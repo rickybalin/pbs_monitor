@@ -897,10 +897,14 @@ def create_app(config=None) -> FastAPI:
                             ELSE 0 END) as node_hours_used
             FROM reservations r
             LEFT JOIN jobs j ON j.queue = substr(r.reservation_id, 1, instr(r.reservation_id, '.') - 1)
-            WHERE r.reservation_id LIKE 'R%'
+            WHERE instr(r.reservation_id, '.') > 0
               AND (
-                r.end_time >= :cutoff
-                OR r.start_time >= :now
+                -- currently active: already started, not yet ended (or end unknown)
+                (r.start_time <= :now AND (r.end_time IS NULL OR r.end_time >= :now))
+                -- upcoming: hasn't started yet
+                OR r.start_time > :now
+                -- recently completed/cancelled: ended within past 14 days
+                OR r.end_time >= :cutoff
               )
             GROUP BY r.reservation_id
             ORDER BY r.start_time DESC
@@ -911,19 +915,30 @@ def create_app(config=None) -> FastAPI:
         for r in rows:
             start = datetime.fromisoformat(r.start_time) if r.start_time else None
             end   = datetime.fromisoformat(r.end_time)   if r.end_time   else None
-            # Determine live state relative to now
-            now_naive = now.replace(tzinfo=None)
-            if r.state not in ('COMPLETED', 'CANCELLED', 'DELETED'):
-                display_state = r.state
-            elif start and end:
-                if now_naive < start:
-                    display_state = 'UPCOMING'
-                elif now_naive <= end:
-                    display_state = 'ACTIVE'
-                else:
-                    display_state = r.state
-            else:
-                display_state = r.state
+            # Normalise state → a clean display label + CSS key
+            # Map verbose/internal enum names to tidy display tokens
+            _STATE_DISPLAY = {
+                'RUNNING':          'RUNNING',
+                'RUNNING_SHORT':    'RUNNING',
+                'RN':               'RUNNING',
+                'CONFIRMED':        'CONFIRMED',
+                'CONFIRMED_SHORT':  'CONFIRMED',
+                'CO':               'CONFIRMED',
+                'DEGRADED':         'DEGRADED',
+                'DG':               'DEGRADED',
+                'FINISHED':         'COMPLETED',
+                'RESV_RUNNING':     'RUNNING',
+                'RESV_CONFIRMED':   'CONFIRMED',
+                'RESV_FINISHED':    'COMPLETED',
+                'RESV_DELETED':     'CANCELLED',
+                'RESV_DEGRADED':    'DEGRADED',
+                'EXPIRED':          'EXPIRED',
+                'DELETED':          'CANCELLED',
+                'BD':               'CANCELLED',
+                'UN':               'UNKNOWN',
+                'UNKNOWN':          'UNKNOWN',
+            }
+            display_state = _STATE_DISPLAY.get(r.state, r.state)
 
             node_hours_reserved = None
             utilization_pct = None
