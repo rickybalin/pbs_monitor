@@ -970,3 +970,59 @@ canvas {
     transition: width 0.3s;
 }
 .resv-util-na { color: var(--text-dim); }
+
+/* ── Job classification (blocked/misconfigured) ─────────────────────────── */
+
+.queued-table-controls {
+    display: flex;
+    align-items: center;
+    gap: 1.2rem;
+    padding: 0.4rem 0 0.6rem;
+    flex-wrap: wrap;
+}
+
+.hide-blocked-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+}
+.hide-blocked-toggle input { cursor: pointer; }
+
+.blocked-count {
+    color: #f59e0b;
+    font-size: 0.78rem;
+}
+
+.blocked-legend {
+    display: flex;
+    gap: 1rem;
+    font-size: 0.78rem;
+}
+.bl-item { display: flex; align-items: center; gap: 0.3rem; }
+.bl-never { color: #ef4444; }
+.bl-misc  { color: #f59e0b; }
+
+/* Left border stripe on blocked rows */
+.job-blocked-never {
+    border-left: 4px solid #ef4444;
+}
+.job-blocked-misc {
+    border-left: 4px solid #f59e0b;
+}
+
+/* Status icon column */
+.status-col {
+    width: 28px;
+    text-align: center;
+    padding: 0 4px !important;
+}
+.block-icon {
+    font-size: 0.95rem;
+    cursor: help;
+}
+.block-icon-never { color: #ef4444; }
+.block-icon-misc  { color: #f59e0b; }

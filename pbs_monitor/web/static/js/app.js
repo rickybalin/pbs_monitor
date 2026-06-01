@@ -100,6 +100,25 @@ createApp({
         const loading      = ref(true);
         const error        = ref(null);
 
+        // ── job classification ──
+        const hideBlocked    = ref(false);
+
+        // Classify a queued job based on PBS comment and node availability.
+        // Only flags jobs blocked by hardware limits, not queue contention.
+        // Returns: 'never' | 'misconfigured' | null
+        function classifyJob(job, onlineNodes) {
+            const comment = (job.comment || '').toLowerCase();
+
+            // PBS explicit "Can Never Run" — trust PBS completely
+            if (comment.startsWith('can never run')) return 'never';
+
+            // Requested more nodes than are currently online (offline nodes excluded).
+            // This is a hardware limit — job cannot run regardless of queue state.
+            if (onlineNodes != null && job.nodes > onlineNodes) return 'misconfigured';
+
+            return null;  // normal — waiting its turn
+        }
+
         const activeTab    = ref('running');
         const sortKey      = ref('nodes');
         const sortDesc     = ref(true);
@@ -252,26 +271,40 @@ createApp({
 
         const sortedQueuedJobs  = computed(() => {
             const list = snapshot.value?.jobs?.queued || [];
+            const stateCounts = snapshot.value?.state_counts || {};
+            const offlineNodes = (stateCounts['offline'] || 0) + (stateCounts['down'] || 0) +
+                                 (stateCounts['down,offline'] || 0) + (stateCounts['state-unknown,down'] || 0) +
+                                 (stateCounts['state-unknown,down,offline'] || 0);
+            const totalNodes = snapshot.value?.system?.total_nodes ?? null;
+            const onlineNodes = totalNodes != null ? totalNodes - offlineNodes : null;
             const key = queuedSortKey.value;
-            return [...list].sort((a, b) => {
-                let va = a[key] ?? '';
-                let vb = b[key] ?? '';
-                // nulls last
-                if (va == null && vb == null) return 0;
-                if (va == null) return 1;
-                if (vb == null) return -1;
-                if (typeof va === 'string') va = va.toLowerCase();
-                if (typeof vb === 'string') vb = vb.toLowerCase();
-                if (va < vb) return queuedSortDesc.value ? 1 : -1;
-                if (va > vb) return queuedSortDesc.value ? -1 : 1;
-                return 0;
-            });
+            return [...list]
+                .map(j => ({ ...j, _classification: classifyJob(j, onlineNodes), _onlineNodes: onlineNodes }))
+                .sort((a, b) => {
+                    let va = a[key] ?? '';
+                    let vb = b[key] ?? '';
+                    // nulls last
+                    if (va == null && vb == null) return 0;
+                    if (va == null) return 1;
+                    if (vb == null) return -1;
+                    if (typeof va === 'string') va = va.toLowerCase();
+                    if (typeof vb === 'string') vb = vb.toLowerCase();
+                    if (va < vb) return queuedSortDesc.value ? 1 : -1;
+                    if (va > vb) return queuedSortDesc.value ? -1 : 1;
+                    return 0;
+                });
         });
+
+        const blockedQueuedCount = computed(() =>
+            sortedQueuedJobs.value.filter(j => j._classification != null).length
+        );
 
         const filteredQueuedJobs = computed(() => {
             const parsed = parseFilter(filterText.value);
-            if (!parsed) return sortedQueuedJobs.value;
-            return sortedQueuedJobs.value.filter(j => jobMatchesFilter(j, parsed));
+            let list = sortedQueuedJobs.value;
+            if (hideBlocked.value) list = list.filter(j => j._classification == null);
+            if (!parsed) return list;
+            return list.filter(j => jobMatchesFilter(j, parsed));
         });
 
         const sortedHeldJobs = computed(() => {
@@ -883,6 +916,7 @@ createApp({
         return {
             systemInfo, snapshot, loading, error,
             activeTab, sortKey, sortDesc, queuedSortKey, queuedSortDesc, selectedJobId, hoveredJobId, filterText,
+            hideBlocked, blockedQueuedCount,
             depthGroupBy, depthShowHeld,
             nodeCanvas, mapContainer, jobsSection, tooltip, tooltipStyle,
             jobDetail, jobDetailLoading,
