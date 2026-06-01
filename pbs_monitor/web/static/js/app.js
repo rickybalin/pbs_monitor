@@ -100,6 +100,41 @@ createApp({
         const loading      = ref(true);
         const error        = ref(null);
 
+        // ── job classification ──
+        const hideBlocked    = ref(false);
+
+        // Classify a queued job based on PBS comment and resource heuristics.
+        // Returns: 'never' | 'misconfigured' | null
+        function classifyJob(job, availableNodes, cpusPerNode) {
+            const comment = (job.comment || '').toLowerCase();
+
+            // PBS explicit "Can Never Run" label
+            if (comment.startsWith('can never run')) return 'never';
+
+            const nodes = job.nodes || 1;
+            const ncpus = job.ncpus_requested;
+
+            // Misconfigured: requests more CPUs per node than the system has
+            if (ncpus != null && cpusPerNode != null) {
+                const ncpusPerNode = ncpus / nodes;
+                if (ncpusPerNode > cpusPerNode) return 'misconfigured';
+            }
+
+            // Likely never runs: ncpus exceeds what's available cluster-wide
+            if (ncpus != null && availableNodes != null && cpusPerNode != null) {
+                const availableCpus = availableNodes * cpusPerNode;
+                if (ncpus > availableCpus) return 'never';
+            }
+
+            // Misconfigured: wrong queue_tags
+            if (comment.includes('insufficient amount of resource: queue_tags')) return 'misconfigured';
+
+            // Wrong system entirely
+            if (comment.includes('can never run')) return 'never';
+
+            return null;  // normal — just waiting its turn
+        }
+
         const activeTab    = ref('running');
         const sortKey      = ref('nodes');
         const sortDesc     = ref(true);
@@ -252,26 +287,36 @@ createApp({
 
         const sortedQueuedJobs  = computed(() => {
             const list = snapshot.value?.jobs?.queued || [];
+            const availableNodes = snapshot.value?.system?.available_nodes ?? null;
+            const cpusPerNode    = systemInfo.value?.cpus_per_node ?? null;
             const key = queuedSortKey.value;
-            return [...list].sort((a, b) => {
-                let va = a[key] ?? '';
-                let vb = b[key] ?? '';
-                // nulls last
-                if (va == null && vb == null) return 0;
-                if (va == null) return 1;
-                if (vb == null) return -1;
-                if (typeof va === 'string') va = va.toLowerCase();
-                if (typeof vb === 'string') vb = vb.toLowerCase();
-                if (va < vb) return queuedSortDesc.value ? 1 : -1;
-                if (va > vb) return queuedSortDesc.value ? -1 : 1;
-                return 0;
-            });
+            return [...list]
+                .map(j => ({ ...j, _classification: classifyJob(j, availableNodes, cpusPerNode) }))
+                .sort((a, b) => {
+                    let va = a[key] ?? '';
+                    let vb = b[key] ?? '';
+                    // nulls last
+                    if (va == null && vb == null) return 0;
+                    if (va == null) return 1;
+                    if (vb == null) return -1;
+                    if (typeof va === 'string') va = va.toLowerCase();
+                    if (typeof vb === 'string') vb = vb.toLowerCase();
+                    if (va < vb) return queuedSortDesc.value ? 1 : -1;
+                    if (va > vb) return queuedSortDesc.value ? -1 : 1;
+                    return 0;
+                });
         });
+
+        const blockedQueuedCount = computed(() =>
+            sortedQueuedJobs.value.filter(j => j._classification != null).length
+        );
 
         const filteredQueuedJobs = computed(() => {
             const parsed = parseFilter(filterText.value);
-            if (!parsed) return sortedQueuedJobs.value;
-            return sortedQueuedJobs.value.filter(j => jobMatchesFilter(j, parsed));
+            let list = sortedQueuedJobs.value;
+            if (hideBlocked.value) list = list.filter(j => j._classification == null);
+            if (!parsed) return list;
+            return list.filter(j => jobMatchesFilter(j, parsed));
         });
 
         const sortedHeldJobs = computed(() => {
@@ -883,6 +928,7 @@ createApp({
         return {
             systemInfo, snapshot, loading, error,
             activeTab, sortKey, sortDesc, queuedSortKey, queuedSortDesc, selectedJobId, hoveredJobId, filterText,
+            hideBlocked, blockedQueuedCount,
             depthGroupBy, depthShowHeld,
             nodeCanvas, mapContainer, jobsSection, tooltip, tooltipStyle,
             jobDetail, jobDetailLoading,

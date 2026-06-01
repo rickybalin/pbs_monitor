@@ -341,6 +341,17 @@ def create_app(config=None) -> FastAPI:
             .first()
         )
 
+        # CPUs per node by system — used for job misconfiguration detection
+        CPUS_PER_NODE_BY_SYSTEM = {
+            "polaris": 32,   # 2x AMD EPYC Rome 16-core
+            "aurora":  208,  # 2x Intel Xeon Max 9470 (52-core HT)
+            "sophia":  128,  # 2x AMD EPYC Milan 64-core
+        }
+        cpus_per_node = next(
+            (v for k, v in CPUS_PER_NODE_BY_SYSTEM.items() if k in system_name.lower()),
+            None,
+        )
+
         info = {
             "system_name": system_name,
             "server_host": socket.gethostname(),
@@ -350,6 +361,7 @@ def create_app(config=None) -> FastAPI:
             "snapshot_indices": snapshot_indices,
             "last_collection": last_log[0].isoformat() if last_log else None,
             "job_sort_formula": _get_job_formula(),
+            "cpus_per_node": cpus_per_node,
         }
         _system_cache.update(info)
         return info
@@ -462,6 +474,12 @@ def create_app(config=None) -> FastAPI:
             # Extract score from raw PBS data
             score = _extract_job_score(job, _get_job_formula())
 
+            # Extract comment and ncpus from raw PBS data for job classification
+            raw = job.raw_pbs_data or {}
+            rl = raw.get("Resource_List", {})
+            ncpus_req = rl.get("ncpus")
+            comment = raw.get("comment", "")
+
             queued_jobs.append({
                 "job_id": _short_job_id(job.job_id),
                 "full_job_id": job.job_id,
@@ -474,6 +492,8 @@ def create_app(config=None) -> FastAPI:
                 "walltime": job.walltime or "",
                 "queue_time_seconds": queue_time,
                 "score": score,
+                "ncpus_requested": ncpus_req,
+                "comment": comment,
             })
 
         # --- held jobs count ---

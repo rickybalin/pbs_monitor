@@ -182,9 +182,21 @@
                     </table>
 
                     <!-- Queued Jobs Table -->
+                    <div v-if="activeTab === 'queued'" class="queued-table-controls">
+                        <label class="hide-blocked-toggle">
+                            <input type="checkbox" v-model="hideBlocked">
+                            Hide blocked jobs
+                            <span v-if="blockedQueuedCount > 0" class="blocked-count">({{ blockedQueuedCount }})</span>
+                        </label>
+                        <div class="blocked-legend">
+                            <span class="bl-item bl-never">&#9632; Can never run</span>
+                            <span class="bl-item bl-misc">&#9632; Misconfigured</span>
+                        </div>
+                    </div>
                     <table v-if="activeTab === 'queued'" class="jobs-table">
                         <thead>
                             <tr>
+                                <th class="status-col"></th>
                                 <th @click="sortQueuedJobs('score')">Score<span v-if="queuedSortKey==='score'" class="sort-arrow">{{ queuedSortDesc ? '▼' : '▲' }}</span></th>
                                 <th @click="sortQueuedJobs('job_id')">ID<span v-if="queuedSortKey==='job_id'" class="sort-arrow">{{ queuedSortDesc ? '▼' : '▲' }}</span></th>
                                 <th @click="sortQueuedJobs('owner')">Owner<span v-if="queuedSortKey==='owner'" class="sort-arrow">{{ queuedSortDesc ? '▼' : '▲' }}</span></th>
@@ -199,7 +211,19 @@
                         <tbody>
                             <tr v-for="job in filteredQueuedJobs" :key="job.job_id"
                                 @click="openJobDetail(job.job_id)"
-                                style="cursor:pointer">
+                                style="cursor:pointer"
+                                :class="{
+                                    'job-blocked-never': job._classification === 'never',
+                                    'job-blocked-misc':  job._classification === 'misconfigured'
+                                }">
+                                <td class="status-col">
+                                    <span v-if="job._classification === 'never'"
+                                          class="block-icon block-icon-never"
+                                          :title="job.comment || 'Can never run'">&#9940;</span>
+                                    <span v-else-if="job._classification === 'misconfigured'"
+                                          class="block-icon block-icon-misc"
+                                          :title="job.comment || 'Misconfigured resources'">&#9888;</span>
+                                </td>
                                 <td class="score-cell">{{ fmtScore(job.score) }}</td>
                                 <td>{{ job.job_id }}</td>
                                 <td><a :href="'/page/user/' + job.owner" target="_blank" class="context-link" @click.stop>{{ job.owner }}</a></td>
@@ -211,7 +235,7 @@
                                 <td>{{ fmtDuration(job.queue_time_seconds) }}</td>
                             </tr>
                             <tr v-if="sortedQueuedJobs.length === 0">
-                                <td colspan="9" class="empty-row">No queued jobs</td>
+                                <td colspan="10" class="empty-row">No queued jobs</td>
                             </tr>
                         </tbody>
                     </table>
