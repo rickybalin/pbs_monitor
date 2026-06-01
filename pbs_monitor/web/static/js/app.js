@@ -902,7 +902,7 @@ createApp({
             await fetchData();
             fetchReservations();
             fetchWaitDist();
-            pollTimer = setInterval(() => { fetchData(); fetchWaitDist(); }, 30000);
+            pollTimer = setInterval(() => { fetchData(); fetchWaitDist(); fetchReservations(); }, 30000);
             window.addEventListener('resize', onResize);
             window.addEventListener('keydown', onKeyDown);
         });
