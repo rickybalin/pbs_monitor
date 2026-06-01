@@ -190,7 +190,7 @@
                         </label>
                         <div class="blocked-legend">
                             <span class="bl-item bl-never">&#9632; Can never run</span>
-                            <span class="bl-item bl-misc">&#9632; Misconfigured</span>
+                            <span class="bl-item bl-misc">&#9632; Needs more nodes than are online</span>
                         </div>
                     </div>
                     <table v-if="activeTab === 'queued'" class="jobs-table">
@@ -222,7 +222,7 @@
                                           :title="job.comment || 'Can never run'">&#9940;</span>
                                     <span v-else-if="job._classification === 'misconfigured'"
                                           class="block-icon block-icon-misc"
-                                          :title="job.comment || 'Misconfigured resources'">&#9888;</span>
+                                          :title="'Requests ' + job.nodes + ' nodes but only ' + job._onlineNodes + ' are online'">&#9888;</span>
                                 </td>
                                 <td class="score-cell">{{ fmtScore(job.score) }}</td>
                                 <td>{{ job.job_id }}</td>

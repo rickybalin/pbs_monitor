@@ -103,30 +103,20 @@ createApp({
         // ── job classification ──
         const hideBlocked    = ref(false);
 
-        // Classify a queued job based on PBS comment and resource heuristics.
-        // Only flags jobs that cannot run due to hardware limits — not jobs
-        // that are simply waiting for resources to free up.
+        // Classify a queued job based on PBS comment and node availability.
+        // Only flags jobs blocked by hardware limits, not queue contention.
         // Returns: 'never' | 'misconfigured' | null
-        function classifyJob(job, cpusPerNode) {
+        function classifyJob(job, onlineNodes) {
             const comment = (job.comment || '').toLowerCase();
 
-            // PBS explicit "Can Never Run" label (wrong system, impossible resource, etc.)
+            // PBS explicit "Can Never Run" — trust PBS completely
             if (comment.startsWith('can never run')) return 'never';
 
-            const nodes = job.nodes || 1;
-            const ncpus = job.ncpus_requested;
+            // Requested more nodes than are currently online (offline nodes excluded).
+            // This is a hardware limit — job cannot run regardless of queue state.
+            if (onlineNodes != null && job.nodes > onlineNodes) return 'misconfigured';
 
-            // Misconfigured: requests more CPUs per node than the system physically has.
-            // This is a hardware impossibility — no amount of waiting will fix it.
-            if (ncpus != null && cpusPerNode != null) {
-                const ncpusPerNode = ncpus / nodes;
-                if (ncpusPerNode > cpusPerNode) return 'misconfigured';
-            }
-
-            // Misconfigured: wrong queue_tags — job attributes don't match any queue
-            if (comment.includes('insufficient amount of resource: queue_tags')) return 'misconfigured';
-
-            return null;  // normal — waiting its turn, no hardware blocker
+            return null;  // normal — waiting its turn
         }
 
         const activeTab    = ref('running');
@@ -281,10 +271,15 @@ createApp({
 
         const sortedQueuedJobs  = computed(() => {
             const list = snapshot.value?.jobs?.queued || [];
-            const cpusPerNode = systemInfo.value?.cpus_per_node ?? null;
+            const stateCounts = snapshot.value?.state_counts || {};
+            const offlineNodes = (stateCounts['offline'] || 0) + (stateCounts['down'] || 0) +
+                                 (stateCounts['down,offline'] || 0) + (stateCounts['state-unknown,down'] || 0) +
+                                 (stateCounts['state-unknown,down,offline'] || 0);
+            const totalNodes = snapshot.value?.system?.total_nodes ?? null;
+            const onlineNodes = totalNodes != null ? totalNodes - offlineNodes : null;
             const key = queuedSortKey.value;
             return [...list]
-                .map(j => ({ ...j, _classification: classifyJob(j, cpusPerNode) }))
+                .map(j => ({ ...j, _classification: classifyJob(j, onlineNodes), _onlineNodes: onlineNodes }))
                 .sort((a, b) => {
                     let va = a[key] ?? '';
                     let vb = b[key] ?? '';
