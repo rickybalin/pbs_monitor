@@ -916,7 +916,6 @@ def create_app(config=None) -> FastAPI:
             start = datetime.fromisoformat(r.start_time) if r.start_time else None
             end   = datetime.fromisoformat(r.end_time)   if r.end_time   else None
             # Normalise state → a clean display label + CSS key
-            now_naive = now.replace(tzinfo=None)
             # Map verbose/internal enum names to tidy display tokens
             _STATE_DISPLAY = {
                 'RUNNING':          'RUNNING',
@@ -939,18 +938,7 @@ def create_app(config=None) -> FastAPI:
                 'UN':               'UNKNOWN',
                 'UNKNOWN':          'UNKNOWN',
             }
-            terminal_states = {'COMPLETED', 'CANCELLED', 'DELETED', 'FINISHED',
-                               'RESV_FINISHED', 'RESV_DELETED', 'EXPIRED'}
-            if r.state in terminal_states and start and end:
-                # Re-evaluate against wall clock in case DB state is stale
-                if now_naive < start:
-                    display_state = 'CONFIRMED'
-                elif now_naive <= end:
-                    display_state = 'RUNNING'
-                else:
-                    display_state = _STATE_DISPLAY.get(r.state, r.state)
-            else:
-                display_state = _STATE_DISPLAY.get(r.state, r.state)
+            display_state = _STATE_DISPLAY.get(r.state, r.state)
 
             node_hours_reserved = None
             utilization_pct = None
