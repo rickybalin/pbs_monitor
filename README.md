@@ -154,7 +154,7 @@ pbs-monitor analyze usage-insights
 pbs-monitor analyze usage-insights -d 7
 
 # Filter out undesired queues
-pbs-monitor analyze usage-insights -x 
+pbs-monitor analyze usage-insights -x <queue_name>
 
 # See all options
 pbs-monitor analyze usage-insights -h
