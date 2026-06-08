@@ -33,3 +33,6 @@ flake8>=5.0.0
 # Web dashboard
 fastapi>=0.100.0
 uvicorn[standard]>=0.20.0
+
+# Plot visualization from terminal
+imgcat>=0.6.0
