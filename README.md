@@ -52,12 +52,12 @@ pbs-monitor history -d 7        # Completed jobs from last 7 days
 ### Monitoring
 | Command | Description |
 |---------|-------------|
-| `status` | System status summary |
-| `jobs` | Job listing with filters (`-u`, `-p`, `-q`, `-s`) |
-| `nodes` | Node status and utilization |
-| `queues` | Queue information |
-| `history` | Historical completed jobs from database |
-| `resv` | Reservation listing and details |
+| `pbs-monitor status` | System status summary |
+| `pbs-monitor jobs` | Job listing with filters (`-u`, `-p`, `-q`, `-s`) |
+| `pbs-monitor nodes` | Node status and utilization |
+| `pbs-monitor queues` | Queue information |
+| `pbs-monitor history` | Historical completed jobs from database |
+| `pbs-monitor resv` | Reservation listing and details |
 
 ### Analytics (`analyze` subcommands)
 | Command | Description |
@@ -80,13 +80,13 @@ pbs-monitor history -d 7        # Completed jobs from last 7 days
 ### Database & Daemon
 | Command | Description |
 |---------|-------------|
-| `database init` | Initialize database schema |
-| `database status` | Show database info and table counts |
-| `database backup` | Create backup (SQLite) |
-| `database cleanup` | Remove old data |
-| `daemon start` | Start background data collection |
-| `daemon stop` | Stop daemon |
-| `daemon status` | Check daemon status |
+| `pbs-monitor database init` | Initialize database schema |
+| `pbs-monitor database status` | Show database info and table counts |
+| `pbs-monitor database backup` | Create backup (SQLite) |
+| `pbs-monitor database cleanup` | Remove old data |
+| `pbs-monitor daemon start` | Start background data collection |
+| `pbs-monitor daemon stop` | Stop daemon |
+| `pbs-monitor daemon status` | Check daemon status |
 
 ## Common Options
 
