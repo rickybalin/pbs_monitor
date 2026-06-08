@@ -74,8 +74,8 @@ pbs-monitor history -d 7        # Completed jobs from last 7 days
 ### Visualization
 | Command | Description |
 |---------|-------------|
-| `score-formula` | Display and plot PBS job sort formula |
-| `replay` | Replay historical job timelines (terminal, waffle charts, GIFs) |
+| `pbs-monitor score-formula` | Display and plot PBS job sort formula |
+| `pbs-monitor replay` | Replay historical job timelines (terminal, waffle charts, GIFs) |
 
 ### Database & Daemon
 | Command | Description |
