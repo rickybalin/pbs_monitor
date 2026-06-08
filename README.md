@@ -59,17 +59,17 @@ pbs-monitor history -d 7        # Completed jobs from last 7 days
 | `pbs-monitor history` | Historical completed jobs from database |
 | `pbs-monitor resv` | Reservation listing and details |
 
-### Analytics (`analyze` subcommands)
+### Analytics
 | Command | Description |
 |---------|-------------|
-| `run-now` | Find job shapes that can start immediately |
-| `run-score` | Analyze job scores at queue→run transitions |
-| `walltime-efficiency-by-user` | Walltime efficiency per user |
-| `walltime-efficiency-by-project` | Walltime efficiency per project |
-| `reservation-utilization` | Reservation utilization analysis |
-| `leaderboard` | Top users/projects by node-hours |
-| `usage-insights` | Derived usage metrics and plots |
-| `time-comparison` | Compare metrics across time windows |
+| `pbs-monitor analyze run-now` | Find job shapes that can start immediately |
+| `pbs-monitor analyze run-score` | Analyze job scores at queue→run transitions |
+| `pbs-monitor analyze walltime-efficiency-by-user` | Walltime efficiency per user |
+| `pbs-monitor analyze walltime-efficiency-by-project` | Walltime efficiency per project |
+| `pbs-monitor analyze reservation-utilization` | Reservation utilization analysis |
+| `pbs-monitor analyze leaderboard` | Top users/projects by node-hours |
+| `pbs-monitor analyze usage-insights` | Derived usage metrics and plots |
+| `pbs-monitor analyze time-comparison` | Compare metrics across time windows |
 
 ### Visualization
 | Command | Description |
@@ -131,7 +131,7 @@ Environment override: `PBS_MONITOR_DB_URL="sqlite:///path/to/db"`
 
 ```bash
 # Start daemon (background)
-pbs-monitor daemon start --detach
+pbs-monitor daemon start
 
 # Check status
 pbs-monitor daemon status
@@ -141,6 +141,24 @@ pbs-monitor daemon stop
 ```
 
 The daemon periodically collects job, node, and queue data to the database.
+
+## Generate Utilization Plots
+
+Use `pbs-monitor analyze usage-insights` to generate utilization plots. These will be created under `./plots` in `.png` format.
+
+```bash
+# Analyze all data from last 30 days (default)
+pbs-monitor analyze usage-insights
+
+# Filter based on past number of days (7 in this case)
+pbs-monitor analyze usage-insights -d 7
+
+# Filter out undesired queues
+pbs-monitor analyze usage-insights -x 
+
+# See all options
+pbs-monitor analyze usage-insights -h
+```
 
 ## Documentation
 
