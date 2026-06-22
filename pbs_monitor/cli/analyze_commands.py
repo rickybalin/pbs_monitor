@@ -11,7 +11,7 @@ import pandas as pd
 from datetime import datetime
 
 from .commands import BaseCommand
-from ..analytics import RunScoreAnalyzer, WalltimeEfficiencyAnalyzer, ReservationUtilizationAnalyzer, ReservationTrendAnalyzer, LeaderboardAnalyzer, LeaderboardConfig
+from ..analytics import RunScoreAnalyzer, ScoreTrajectoryAnalyzer, WalltimeEfficiencyAnalyzer, ReservationUtilizationAnalyzer, ReservationTrendAnalyzer, LeaderboardAnalyzer, LeaderboardConfig
 from ..analytics.usage_insights import UsageInsights, QueueFilter
 
 
@@ -25,6 +25,7 @@ class AnalyzeCommand(BaseCommand):
          print("\nAvailable analyze actions:")
          print("  run-now                      Suggest a job shape you can run right now safely")
          print("  run-score                    Analyze job scores at queue → run transitions")
+         print("  score-trajectory             Plot score-over-time for specific jobs vs. comparable history")
          print("  walltime-efficiency-by-user  Analyze walltime efficiency by user")
          print("  walltime-efficiency-by-project Analyze walltime efficiency by project")
          print("  reservation-utilization      Analyze reservation utilization patterns")
@@ -35,6 +36,7 @@ class AnalyzeCommand(BaseCommand):
          print("\nExamples:")
          print("  pbs-monitor analyze run-now                    # Get a run-now suggestion")
          print("  pbs-monitor analyze run-score                    # Analyze job scores")
+         print("  pbs-monitor analyze score-trajectory <job_id>    # Plot a stuck job's score over time")
          print("  pbs-monitor analyze walltime-efficiency-by-user  # Analyze user efficiency")
          print("  pbs-monitor analyze reservation-utilization      # Analyze reservation usage (last 7 days + future)")
          print("  pbs-monitor analyze reservation-utilization -d 30  # Analyze last 30 days + future")
@@ -48,6 +50,8 @@ class AnalyzeCommand(BaseCommand):
           return self._analyze_run_now(args)
       elif args.analyze_action == "run-score":
          return self._analyze_run_score(args)
+      elif args.analyze_action == "score-trajectory":
+         return self._analyze_score_trajectory(args)
       elif args.analyze_action == "walltime-efficiency-by-user":
          return self._analyze_walltime_efficiency_by_user(args)
       elif args.analyze_action == "walltime-efficiency-by-project":
@@ -527,12 +531,133 @@ class AnalyzeCommand(BaseCommand):
    
    def _display_csv_output(self, df: pd.DataFrame) -> None:
       """Display results in CSV format"""
-      
+
       # Remove count columns for CSV output
       csv_df = df.drop(columns=[col for col in df.columns if col.endswith('_count')])
-      
+
       # Output CSV
       self.console.print(csv_df.to_csv(index=False))
+
+   def _analyze_score_trajectory(self, args: argparse.Namespace) -> int:
+      """Plot score-over-time for specific jobs with comparable-job overlays."""
+      import os
+
+      try:
+         analyzer = ScoreTrajectoryAnalyzer()
+
+         job_ids = list(getattr(args, 'job_ids', []) or [])
+         days = getattr(args, 'days', 30)
+
+         if not job_ids:
+            self.console.print("[red]Error: at least one job_id is required[/red]")
+            return 1
+
+         self.console.print(
+            f"[bold blue]Analyzing score trajectory for {len(job_ids)} job(s) "
+            f"(comparable window: last {days} days)...[/bold blue]"
+         )
+
+         results = analyzer.analyze_jobs(job_ids, days=days)
+
+         # Warn about missing or trivially-empty cases
+         for r in results:
+            if r.get('error'):
+               self.console.print(f"[yellow]Skipping {r['job_id']}: {r['error']}[/yellow]")
+               continue
+            if not r.get('trajectory'):
+               self.console.print(
+                  f"[yellow]No score history found for {r['job_id']} "
+                  f"(state={r.get('state')})[/yellow]"
+               )
+            if r.get('n_comparable', 0) == 0:
+               self.console.print(
+                  f"[yellow]No comparable finished jobs found for {r['job_id']} "
+                  f"in queue '{r.get('queue')}' with shape "
+                  f"[{r.get('node_bin')} nodes, {r.get('walltime_bin')}].[/yellow]"
+               )
+
+         # Summary table or CSV
+         summary_df = analyzer.to_summary_dataframe(results)
+         output_format = getattr(args, 'format', 'table')
+         if output_format == 'csv':
+            self.console.print(summary_df.to_csv(index=False))
+         else:
+            self._display_score_trajectory_table(summary_df)
+
+         # Plot
+         if not getattr(args, 'no_plot', False):
+            out_dir = getattr(args, 'output_dir', 'plots')
+            save_path = os.path.join(out_dir, 'score_trajectory.png')
+            self.console.print("[bold blue]Generating plot...[/bold blue]")
+            saved = analyzer.generate_plot(results, save_path=save_path)
+            if saved:
+               self.console.print(f"Saved: {saved}")
+            else:
+               self.console.print(
+                  "[yellow]No plot generated (no plottable data or plotting backend unavailable).[/yellow]"
+               )
+
+         return 0
+
+      except Exception as e:
+         self.logger.error(f"Error analyzing score trajectory: {str(e)}")
+         self.console.print(f"[red]Error: {str(e)}[/red]")
+         return 1
+
+   def _display_score_trajectory_table(self, df: pd.DataFrame) -> None:
+      """Render score-trajectory summary as a rich table."""
+      if df.empty:
+         self.console.print("[yellow]No results to display.[/yellow]")
+         return
+
+      headers = [
+         'Job ID', 'Queue', 'Nodes', 'Walltime', 'Shape Bin',
+         'Current Score', 'Comparable Run Score', 'Comparable Queue Time (h)',
+         'Projected Start', 'N'
+      ]
+      rows = []
+      for _, r in df.iterrows():
+         shape_bin = f"{r.get('node_bin') or '?'} / {r.get('walltime_bin') or '?'}"
+         current = r.get('current_score')
+         current_str = f"{current:.0f}" if pd.notna(current) and current is not None else "—"
+         mean_rs = r.get('mean_run_score')
+         std_rs = r.get('std_run_score')
+         if pd.notna(mean_rs) and mean_rs is not None:
+            rs_str = f"{mean_rs:.0f} ± {std_rs:.0f}" if std_rs is not None else f"{mean_rs:.0f}"
+         else:
+            rs_str = "—"
+         mean_qt = r.get('mean_queue_time_hours')
+         std_qt = r.get('std_queue_time_hours')
+         if pd.notna(mean_qt) and mean_qt is not None:
+            qt_str = f"{mean_qt:.1f} ± {std_qt:.1f}" if std_qt is not None else f"{mean_qt:.1f}"
+         else:
+            qt_str = "—"
+         proj = r.get('projected_start')
+         proj_str = proj.strftime('%Y-%m-%d %H:%M') if isinstance(proj, datetime) else "—"
+         rows.append([
+            str(r.get('job_id', '')),
+            str(r.get('queue') or ''),
+            str(r.get('nodes') or ''),
+            str(r.get('walltime') or ''),
+            shape_bin,
+            current_str,
+            rs_str,
+            qt_str,
+            proj_str,
+            str(int(r.get('n_comparable') or 0)),
+         ])
+
+      table = self._create_table(
+         title="Score Trajectory Summary",
+         headers=headers,
+         rows=rows
+      )
+      self.console.print(table)
+      self.console.print(
+         "\n[dim]Comparable Run Score is the mean ± std of Q→R scores for finished jobs "
+         "in the same queue and shape bin within the analysis window. "
+         "Projected Start = submit_time + mean queue time of comparable jobs.[/dim]"
+      )
 
    def _analyze_usage_insights(self, args: argparse.Namespace) -> int:
       """Usage insights analysis and plots (Milestones 1 and 2)"""

@@ -174,6 +174,29 @@ Analyze job scores at queue→run transitions.
 pbs-monitor analyze run-score [-d DAYS] [--format {table,csv}]
 ```
 
+### analyze score-trajectory
+
+Plot score-over-time for one or more specific jobs, overlaid with the mean
+and ±1 std band of Q→R scores from finished jobs of the same shape (node
+and walltime bin) and queue. Adds a vertical line at the projected start
+time (submit time + mean queue time of comparable jobs). Useful for
+diagnosing jobs whose priority appears to be accruing too slowly because
+their shape is poorly supported by the queue policy.
+
+```
+pbs-monitor analyze score-trajectory JOB_ID [JOB_ID ...]
+                                     [-d DAYS] [--format {table,csv}]
+                                     [--output-dir DIR] [--no-plot]
+```
+
+| Option | Description |
+|--------|-------------|
+| `JOB_ID` | One or more full job IDs to analyze |
+| `-d, --days` | Days of history to use for comparable-job statistics (default: 30) |
+| `--format` | Summary output format (default: table) |
+| `--output-dir` | Directory for the saved plot (default: `plots`) |
+| `--no-plot` | Skip plot generation, print summary only |
+
 ### analyze walltime-efficiency-by-user
 
 Analyze walltime efficiency by user.

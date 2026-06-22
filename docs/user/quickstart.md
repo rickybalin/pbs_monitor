@@ -147,6 +147,10 @@ pbs-monitor analyze walltime-efficiency-by-user -d 7
 
 # Usage insights with plots
 pbs-monitor analyze usage-insights -d 30 -o ./plots
+
+# Diagnose a slow-accruing job: plot its score over time against
+# comparable finished jobs (same queue, same node/walltime bin)
+pbs-monitor analyze score-trajectory <job_id> -d 30
 ```
 
 ## Visualization

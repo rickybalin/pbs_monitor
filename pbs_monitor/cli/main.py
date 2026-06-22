@@ -417,7 +417,40 @@ Examples:
       default="table",
       help="Output format (default: table)"
    )
-   
+
+   # Analyze score-trajectory
+   score_traj_parser = analyze_subparsers.add_parser(
+      "score-trajectory",
+      help="Plot score-over-time for one or more jobs vs. comparable historical jobs"
+   )
+   score_traj_parser.add_argument(
+      "job_ids",
+      nargs="+",
+      help="One or more full job IDs to analyze"
+   )
+   score_traj_parser.add_argument(
+      "-d", "--days",
+      type=int,
+      default=30,
+      help="Historical window in days for comparable-job statistics (default: 30)"
+   )
+   score_traj_parser.add_argument(
+      "--format",
+      choices=["table", "csv"],
+      default="table",
+      help="Summary output format (default: table)"
+   )
+   score_traj_parser.add_argument(
+      "--output-dir",
+      default="plots",
+      help="Directory to save the score trajectory plot (default: plots)"
+   )
+   score_traj_parser.add_argument(
+      "--no-plot",
+      action="store_true",
+      help="Skip plot generation, print summary only"
+   )
+
    # Analyze walltime-efficiency-by-user
    walltime_user_parser = analyze_subparsers.add_parser(
       "walltime-efficiency-by-user",
