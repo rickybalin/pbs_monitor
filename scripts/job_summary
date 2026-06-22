@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+#
+# job_summary.sh — quick summary of a PBS job: size, requested walltime,
+# time spent in the queue, and any scheduler comment.
+#
+# Usage: ./job_summary.sh <job_id> [<job_id> ...]
+
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 <job_id> [<job_id> ...]" >&2
+    exit 1
+fi
+
+summarize_job() {
+    local JOB_ID="$1"
+
+    local RAW
+    if ! RAW=$(qstat -f "$JOB_ID" 2>&1); then
+        echo "Error: could not retrieve job info for $JOB_ID" >&2
+        echo "$RAW" >&2
+        return 1
+    fi
+
+    # qstat -f wraps long lines with a continuation line starting with a literal
+    # tab. Reconstruct full logical "key = value" lines before parsing.
+    local JOINED
+    JOINED=$(printf '%s\n' "$RAW" | awk '
+        /^\t/ {
+            sub(/^\t/, "", $0)
+            buf = buf $0
+            next
+        }
+        {
+            if (buf != "") print buf
+            buf = $0
+        }
+        END {
+            if (buf != "") print buf
+        }
+    ')
+
+    get_field() {
+        local key="$1"
+        printf '%s\n' "$JOINED" | grep -F "    ${key} = " | sed "s/^    ${key} = //"
+    }
+
+    local JOB_NAME JOB_STATE QUEUE NODECT WALLTIME QTIME COMMENT
+    JOB_NAME=$(get_field "Job_Name")
+    JOB_STATE=$(get_field "job_state")
+    QUEUE=$(get_field "queue")
+    NODECT=$(get_field "Resource_List.nodect")
+    WALLTIME=$(get_field "Resource_List.walltime")
+    QTIME=$(get_field "qtime")
+    COMMENT=$(get_field "comment")
+
+    echo "Job ${JOB_ID}: ${JOB_NAME}"
+    echo "  State:              ${JOB_STATE:-unknown}"
+    echo "  Queue:              ${QUEUE:-unknown}"
+    echo "  Job size:           ${NODECT:-unknown} node(s)"
+    echo "  Requested walltime: ${WALLTIME:-unknown}"
+
+    if [[ -n "$QTIME" ]]; then
+        local QTIME_EPOCH NOW_EPOCH DIFF DAYS HOURS MINS
+        QTIME_EPOCH=$(date -d "$QTIME" +%s 2>/dev/null || true)
+        NOW_EPOCH=$(date +%s)
+        if [[ -n "$QTIME_EPOCH" ]]; then
+            DIFF=$(( NOW_EPOCH - QTIME_EPOCH ))
+            DAYS=$(( DIFF / 86400 ))
+            HOURS=$(( (DIFF % 86400) / 3600 ))
+            MINS=$(( (DIFF % 3600) / 60 ))
+            echo "  Time in queue:      ${DAYS}d ${HOURS}h ${MINS}m (since ${QTIME})"
+        else
+            echo "  Time in queue:      could not parse qtime '${QTIME}'"
+        fi
+    fi
+
+    if [[ -n "$COMMENT" ]]; then
+        echo "  Comment:            ${COMMENT}"
+    fi
+}
+
+JOB_IDS=()
+for arg in "$@"; do
+    IFS=',' read -r -a parts <<< "$arg"
+    for part in "${parts[@]}"; do
+        [[ -n "$part" ]] && JOB_IDS+=("$part")
+    done
+done
+
+rc=0
+first=1
+for job_id in "${JOB_IDS[@]}"; do
+    if [[ $first -eq 0 ]]; then
+        echo
+    fi
+    first=0
+    summarize_job "$job_id" || rc=1
+done
+
+exit "$rc"
