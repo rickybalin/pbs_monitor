@@ -434,6 +434,24 @@ class ScoreTrajectoryAnalyzer:
       title = f"{res['job_id']} — queue={res.get('queue', '?')}, {shape}  {bin_lbl}"
       ax.set_title(title, fontsize=12)
 
+      # Anchor x-axis to the wall-clock queue lifetime (submit_time → now,
+      # or submit_time → start_time for jobs that already started). This
+      # is the only span every job is guaranteed to have data for, even if
+      # `eligible_time` is 0 or the trajectory is a single snapshot
+      # (otherwise matplotlib auto-fits a default multi-year window around
+      # the lone point). The projected-start line may legitimately fall
+      # outside this window — that's fine; it's shown in the legend.
+      # A small symmetric buffer (~5% of the span) keeps endpoint markers
+      # off the axis spines.
+      submit_t = res.get('submit_time')
+      if submit_t is not None:
+         end_t = datetime.now()
+         if trajectory:
+            end_t = max(end_t, max(t for (t, _, _) in trajectory))
+         span = end_t - submit_t
+         pad = max(span * 0.05, timedelta(minutes=10))
+         ax.set_xlim(submit_t - pad, end_t + pad)
+
       # Non-accruing time text box (wall-clock queue − eligible_time)
       na = res.get('non_accruing') or {}
       if na.get('pct_non_accruing') is not None:
@@ -452,7 +470,20 @@ class ScoreTrajectoryAnalyzer:
       ax.set_xlabel("Time")
       ax.set_ylabel("Score")
       if mdates is not None:
-         ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+         # Pick a date format that matches the plot's time span: sub-day
+         # spans want the hour-of-day; multi-day spans don't (every tick
+         # would read 00:00). Use the actual x-axis limits so we don't
+         # mismatch when the axis was anchored to the queue lifetime.
+         xmin_num, xmax_num = ax.get_xlim()
+         span_hours = (xmax_num - xmin_num) * 24.0  # mpl date units = days
+         if span_hours <= 24:
+            fmt = mdates.DateFormatter('%m-%d %H:%M')
+         elif span_hours <= 24 * 14:
+            fmt = mdates.DateFormatter('%Y-%m-%d')
+         else:
+            fmt = mdates.DateFormatter('%Y-%m-%d')
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=10))
+         ax.xaxis.set_major_formatter(fmt)
          for label in ax.get_xticklabels():
             label.set_rotation(30)
             label.set_horizontalalignment('right')
