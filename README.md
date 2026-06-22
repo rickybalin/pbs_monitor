@@ -65,6 +65,7 @@ pbs-monitor history -d 7        # Completed jobs from last 7 days
 | `pbs-monitor analyze run-now` | Find job shapes that can start immediately |
 | `pbs-monitor analyze run-score` | Analyze job scores at queue→run transitions |
 | `pbs-monitor analyze score-trajectory` | Plot a job's score over time vs. comparable historical jobs |
+| `pbs-monitor analyze shape-recommend` | Suggest a better job shape (bundle or change walltime) from history |
 | `pbs-monitor analyze walltime-efficiency-by-user` | Walltime efficiency per user |
 | `pbs-monitor analyze walltime-efficiency-by-project` | Walltime efficiency per project |
 | `pbs-monitor analyze reservation-utilization` | Reservation utilization analysis |

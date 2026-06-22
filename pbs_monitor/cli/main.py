@@ -426,7 +426,7 @@ Examples:
    score_traj_parser.add_argument(
       "job_ids",
       nargs="+",
-      help="One or more full job IDs to analyze"
+      help="One or more job IDs to analyze (full id or numerical-only)"
    )
    score_traj_parser.add_argument(
       "-d", "--days",
@@ -449,6 +449,40 @@ Examples:
       "--no-plot",
       action="store_true",
       help="Skip plot generation, print summary only"
+   )
+
+   # Analyze shape-recommend
+   shape_rec_parser = analyze_subparsers.add_parser(
+      "shape-recommend",
+      help="Suggest an alternative job shape (bundle or change walltime) with shorter historical wait"
+   )
+   shape_rec_parser.add_argument(
+      "job_id",
+      help="Job ID to analyze (full id or numerical-only)"
+   )
+   shape_rec_parser.add_argument(
+      "-d", "--days",
+      type=int,
+      default=30,
+      help="Historical window in days for comparable-job statistics (default: 30)"
+   )
+   shape_rec_parser.add_argument(
+      "--min-samples",
+      type=int,
+      default=5,
+      help="Minimum finished jobs in a candidate bin to consider it (default: 5)"
+   )
+   shape_rec_parser.add_argument(
+      "--top-n",
+      type=int,
+      default=3,
+      help="Maximum number of recommendations to return (default: 3)"
+   )
+   shape_rec_parser.add_argument(
+      "--format",
+      choices=["table", "csv"],
+      default="table",
+      help="Output format (default: table)"
    )
 
    # Analyze walltime-efficiency-by-user

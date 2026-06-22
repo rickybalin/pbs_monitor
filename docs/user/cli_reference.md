@@ -191,11 +191,36 @@ pbs-monitor analyze score-trajectory JOB_ID [JOB_ID ...]
 
 | Option | Description |
 |--------|-------------|
-| `JOB_ID` | One or more full job IDs to analyze |
+| `JOB_ID` | One or more job IDs (full id or numerical-only) |
 | `-d, --days` | Days of history to use for comparable-job statistics (default: 30) |
 | `--format` | Summary output format (default: table) |
 | `--output-dir` | Directory for the saved plot (default: `plots`) |
 | `--no-plot` | Skip plot generation, print summary only |
+
+### analyze shape-recommend
+
+For a single job, suggest an alternative shape (node count × walltime) that
+would historically have a shorter mean queue time in the same queue.
+Recommendations fall in three categories:
+
+- `BUNDLE` — same walltime, more nodes (integer multiplier of current)
+- `CHANGE_WALLTIME` — same node count, different walltime bin
+- `NO_CHANGE` — current shape is already as good as any alternative with
+  enough historical signal
+
+```
+pbs-monitor analyze shape-recommend JOB_ID
+                                    [-d DAYS] [--min-samples N]
+                                    [--top-n N] [--format {table,csv}]
+```
+
+| Option | Description |
+|--------|-------------|
+| `JOB_ID` | Job ID to analyze (full id or numerical-only) |
+| `-d, --days` | Days of history for comparable-job statistics (default: 30) |
+| `--min-samples` | Minimum finished jobs in a candidate bin (default: 5) |
+| `--top-n` | Maximum recommendations to return (default: 3) |
+| `--format` | Output format (default: table) |
 
 ### analyze walltime-efficiency-by-user
 

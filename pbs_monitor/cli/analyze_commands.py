@@ -11,7 +11,7 @@ import pandas as pd
 from datetime import datetime
 
 from .commands import BaseCommand
-from ..analytics import RunScoreAnalyzer, ScoreTrajectoryAnalyzer, WalltimeEfficiencyAnalyzer, ReservationUtilizationAnalyzer, ReservationTrendAnalyzer, LeaderboardAnalyzer, LeaderboardConfig
+from ..analytics import RunScoreAnalyzer, ScoreTrajectoryAnalyzer, ShapeRecommenderAnalyzer, WalltimeEfficiencyAnalyzer, ReservationUtilizationAnalyzer, ReservationTrendAnalyzer, LeaderboardAnalyzer, LeaderboardConfig
 from ..analytics.usage_insights import UsageInsights, QueueFilter
 
 
@@ -26,6 +26,7 @@ class AnalyzeCommand(BaseCommand):
          print("  run-now                      Suggest a job shape you can run right now safely")
          print("  run-score                    Analyze job scores at queue → run transitions")
          print("  score-trajectory             Plot score-over-time for specific jobs vs. comparable history")
+         print("  shape-recommend              Suggest an alternative shape (bundle or change walltime)")
          print("  walltime-efficiency-by-user  Analyze walltime efficiency by user")
          print("  walltime-efficiency-by-project Analyze walltime efficiency by project")
          print("  reservation-utilization      Analyze reservation utilization patterns")
@@ -37,6 +38,7 @@ class AnalyzeCommand(BaseCommand):
          print("  pbs-monitor analyze run-now                    # Get a run-now suggestion")
          print("  pbs-monitor analyze run-score                    # Analyze job scores")
          print("  pbs-monitor analyze score-trajectory <job_id>    # Plot a stuck job's score over time")
+         print("  pbs-monitor analyze shape-recommend <job_id>     # Suggest a better shape for a slow job")
          print("  pbs-monitor analyze walltime-efficiency-by-user  # Analyze user efficiency")
          print("  pbs-monitor analyze reservation-utilization      # Analyze reservation usage (last 7 days + future)")
          print("  pbs-monitor analyze reservation-utilization -d 30  # Analyze last 30 days + future")
@@ -52,6 +54,8 @@ class AnalyzeCommand(BaseCommand):
          return self._analyze_run_score(args)
       elif args.analyze_action == "score-trajectory":
          return self._analyze_score_trajectory(args)
+      elif args.analyze_action == "shape-recommend":
+         return self._analyze_shape_recommend(args)
       elif args.analyze_action == "walltime-efficiency-by-user":
          return self._analyze_walltime_efficiency_by_user(args)
       elif args.analyze_action == "walltime-efficiency-by-project":
@@ -538,6 +542,51 @@ class AnalyzeCommand(BaseCommand):
       # Output CSV
       self.console.print(csv_df.to_csv(index=False))
 
+   def _resolve_job_id(self, raw: str) -> Optional[str]:
+      """
+      Resolve a user-supplied job id to a full job id stored in the DB.
+
+      Accepts either:
+        - A full job id like "12345.aurora-pbs-0001..." (returned as-is if found)
+        - A numerical id like "12345" (matched against rows starting with "12345.")
+
+      Prints diagnostics and returns None when the id is missing, ambiguous,
+      or cannot be found.
+      """
+      from ..database.repositories import RepositoryFactory
+      from ..database.models import Job
+
+      raw = (raw or "").strip()
+      if not raw:
+         return None
+
+      repo = RepositoryFactory().get_job_repository()
+      with repo.get_session() as session:
+         if '.' in raw:
+            job = session.query(Job).filter(Job.job_id == raw).first()
+            if job:
+               return job.job_id
+            self.console.print(f"[red]Job not found in database: {raw}[/red]")
+            return None
+
+         # Numerical id — match all rows whose job_id starts with "<raw>."
+         matches = session.query(Job.job_id).filter(
+            Job.job_id.like(f"{raw}.%")
+         ).all()
+         match_ids = [m[0] for m in matches]
+         if not match_ids:
+            self.console.print(f"[red]Job not found in database: {raw}[/red]")
+            return None
+         if len(match_ids) > 1:
+            self.console.print(f"[red]Multiple jobs match {raw}:[/red]")
+            for mid in match_ids:
+               self.console.print(f"  {mid}")
+            self.console.print(
+               f"[red]Please specify the full job ID (e.g., {match_ids[0]}).[/red]"
+            )
+            return None
+         return match_ids[0]
+
    def _analyze_score_trajectory(self, args: argparse.Namespace) -> int:
       """Plot score-over-time for specific jobs with comparable-job overlays."""
       import os
@@ -545,11 +594,21 @@ class AnalyzeCommand(BaseCommand):
       try:
          analyzer = ScoreTrajectoryAnalyzer()
 
-         job_ids = list(getattr(args, 'job_ids', []) or [])
+         raw_ids = list(getattr(args, 'job_ids', []) or [])
          days = getattr(args, 'days', 30)
 
-         if not job_ids:
+         if not raw_ids:
             self.console.print("[red]Error: at least one job_id is required[/red]")
+            return 1
+
+         # Resolve numerical ids to full job ids (mirrors `show` in commands.py)
+         job_ids: List[str] = []
+         for raw in raw_ids:
+            resolved = self._resolve_job_id(raw)
+            if resolved is not None:
+               job_ids.append(resolved)
+
+         if not job_ids:
             return 1
 
          self.console.print(
@@ -658,6 +717,146 @@ class AnalyzeCommand(BaseCommand):
          "in the same queue and shape bin within the analysis window. "
          "Projected Start = submit_time + mean queue time of comparable jobs.[/dim]"
       )
+
+   def _analyze_shape_recommend(self, args: argparse.Namespace) -> int:
+      """Suggest an alternative shape (BUNDLE or CHANGE_WALLTIME) for a single job."""
+      try:
+         analyzer = ShapeRecommenderAnalyzer()
+
+         raw_job_id = getattr(args, 'job_id', None)
+         days = getattr(args, 'days', 30)
+         min_samples = getattr(args, 'min_samples', 5)
+         top_n = getattr(args, 'top_n', 3)
+
+         if not raw_job_id:
+            self.console.print("[red]Error: job_id is required[/red]")
+            return 1
+
+         job_id = self._resolve_job_id(raw_job_id)
+         if job_id is None:
+            return 1
+
+         self.console.print(
+            f"[bold blue]Computing shape recommendations for {job_id} "
+            f"(window: last {days} days, min_samples={min_samples}, top_n={top_n})...[/bold blue]"
+         )
+
+         result = analyzer.recommend_for_job(
+            job_id, days=days, min_samples=min_samples, top_n=top_n
+         )
+
+         if result.get('error'):
+            self.console.print(f"[red]Error: {result['error']}[/red]")
+            return 1
+
+         output_format = getattr(args, 'format', 'table')
+         if output_format == 'csv':
+            self._display_shape_recommend_csv(result)
+         else:
+            self._display_shape_recommend_table(result)
+
+         return 0
+
+      except Exception as e:
+         self.logger.error(f"Error computing shape recommendation: {str(e)}")
+         self.console.print(f"[red]Error: {str(e)}[/red]")
+         return 1
+
+   def _display_shape_recommend_table(self, result: Dict[str, Any]) -> None:
+      """Render shape-recommend result as header + recommendation table."""
+      shape = f"{result.get('nodes', '?')}n × {result.get('walltime', '?')}"
+      bin_lbl = f"[{result.get('node_bin', '?')} nodes, {result.get('walltime_bin', '?')}]"
+      self.console.print(
+         f"\n[bold green]Target:[/bold green] {result['job_id']} "
+         f"  queue=[cyan]{result.get('queue')}[/cyan]  shape={shape}  bin={bin_lbl}"
+      )
+
+      cur = result.get('current_stats') or {}
+      if cur.get('n', 0) > 0 and cur.get('mean_wait_hours') is not None:
+         self.console.print(
+            f"[bold green]Current bin stats:[/bold green] "
+            f"mean wait = {cur['mean_wait_hours']:.2f} ± {cur['std_wait_hours']:.2f} h "
+            f"(n={cur['n']})"
+         )
+      else:
+         self.console.print(
+            "[yellow]No historical jobs in the current shape bin "
+            "— recommendation will list any candidate with sufficient samples.[/yellow]"
+         )
+
+      recs = result.get('recommendations') or []
+      overall = result.get('overall', 'NO_CHANGE')
+
+      if not recs:
+         self.console.print(
+            f"\n[bold green]Recommendation:[/bold green] [yellow]NO_CHANGE[/yellow]"
+         )
+         self.console.print(
+            f"[dim]No alternative bin with n ≥ {result.get('min_samples')} beats the current "
+            f"mean wait by more than 1 std.[/dim]"
+         )
+         return
+
+      headers = [
+         'Category', 'Suggested Shape', 'Bin', 'Mean Wait (h)',
+         'Std (h)', 'N', 'Improvement (h)'
+      ]
+      rows = []
+      for r in recs:
+         suggested = f"{r['suggested_nodes']}n × {r['suggested_walltime']}"
+         bin_str = f"{r['node_bin']} / {r['walltime_bin']}"
+         imp = r.get('improvement_hours')
+         if imp is None or (isinstance(imp, float) and imp != imp):
+            imp_str = "—"
+         else:
+            imp_str = f"{imp:+.2f}"
+         rows.append([
+            r['category'],
+            suggested,
+            bin_str,
+            f"{r['mean_wait_hours']:.2f}",
+            f"{r['std_wait_hours']:.2f}",
+            str(int(r['n'])),
+            imp_str,
+         ])
+
+      table = self._create_table(
+         title=f"Shape Recommendations ({overall})",
+         headers=headers,
+         rows=rows
+      )
+      self.console.print(table)
+      self.console.print(
+         "\n[dim]BUNDLE = same walltime, larger node count (integer multiplier of current). "
+         "CHANGE_WALLTIME = same node count, different walltime bin. "
+         "Improvement is current mean wait − candidate mean wait, in hours. "
+         "Candidates require n ≥ min_samples and mean wait below (current mean − current std).[/dim]"
+      )
+
+   def _display_shape_recommend_csv(self, result: Dict[str, Any]) -> None:
+      """CSV output for piping: one row per recommendation."""
+      recs = result.get('recommendations') or []
+      rows = []
+      for r in recs:
+         rows.append({
+            'job_id': result.get('job_id'),
+            'queue': result.get('queue'),
+            'current_nodes': result.get('nodes'),
+            'current_walltime': result.get('walltime'),
+            'current_node_bin': result.get('node_bin'),
+            'current_walltime_bin': result.get('walltime_bin'),
+            'category': r['category'],
+            'suggested_nodes': r['suggested_nodes'],
+            'suggested_walltime': r['suggested_walltime'],
+            'candidate_node_bin': r['node_bin'],
+            'candidate_walltime_bin': r['walltime_bin'],
+            'mean_wait_hours': r['mean_wait_hours'],
+            'std_wait_hours': r['std_wait_hours'],
+            'n': r['n'],
+            'improvement_hours': r.get('improvement_hours'),
+         })
+      df = pd.DataFrame(rows)
+      self.console.print(df.to_csv(index=False))
 
    def _analyze_usage_insights(self, args: argparse.Namespace) -> int:
       """Usage insights analysis and plots (Milestones 1 and 2)"""

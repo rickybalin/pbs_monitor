@@ -12,6 +12,35 @@ if [[ $# -lt 1 ]]; then
     exit 1
 fi
 
+format_duration() {
+    # Render a duration (in seconds) as both hours and D:H:M.
+    # Example: 230.2h (9d 14h 10m)
+    local total="$1"
+    awk -v s="$total" 'BEGIN {
+        hours = s / 3600.0
+        d = int(s / 86400)
+        h = int((s % 86400) / 3600)
+        m = int((s % 3600) / 60)
+        printf "%.1fh (%dd %dh %dm)", hours, d, h, m
+    }'
+}
+
+parse_pbs_duration() {
+    # Accepts PBS duration strings in HH:MM:SS or DD:HH:MM:SS form and
+    # prints the total in seconds.
+    local s="$1"
+    awk -v t="$s" 'BEGIN {
+        n = split(t, p, ":")
+        if (n == 3) {
+            printf "%d", p[1]*3600 + p[2]*60 + p[3]
+        } else if (n == 4) {
+            printf "%d", p[1]*86400 + p[2]*3600 + p[3]*60 + p[4]
+        } else {
+            exit 1
+        }
+    }' 2>/dev/null
+}
+
 summarize_job() {
     local JOB_ID="$1"
 
@@ -45,38 +74,74 @@ summarize_job() {
         printf '%s\n' "$JOINED" | grep -F "    ${key} = " | sed "s/^    ${key} = //"
     }
 
-    local JOB_NAME JOB_STATE QUEUE NODECT WALLTIME QTIME COMMENT
+    local JOB_NAME JOB_STATE QUEUE NODECT WALLTIME QTIME STIME ETIME COMMENT
     JOB_NAME=$(get_field "Job_Name")
     JOB_STATE=$(get_field "job_state")
     QUEUE=$(get_field "queue")
     NODECT=$(get_field "Resource_List.nodect")
     WALLTIME=$(get_field "Resource_List.walltime")
     QTIME=$(get_field "qtime")
+    STIME=$(get_field "stime")
+    ETIME=$(get_field "eligible_time")
     COMMENT=$(get_field "comment")
 
     echo "Job ${JOB_ID}: ${JOB_NAME}"
-    echo "  State:              ${JOB_STATE:-unknown}"
-    echo "  Queue:              ${QUEUE:-unknown}"
-    echo "  Job size:           ${NODECT:-unknown} node(s)"
-    echo "  Requested walltime: ${WALLTIME:-unknown}"
+    echo "  State:               ${JOB_STATE:-unknown}"
+    echo "  Queue:               ${QUEUE:-unknown}"
+    echo "  Job size:            ${NODECT:-unknown} node(s)"
+    echo "  Requested walltime:  ${WALLTIME:-unknown}"
 
+    # Total queue time = (start time or now) − submit time. Wall-clock
+    # duration the job has spent in the queue.
+    local TOTAL_S=""
+    local TOTAL_REF=""
     if [[ -n "$QTIME" ]]; then
-        local QTIME_EPOCH NOW_EPOCH DIFF DAYS HOURS MINS
+        local QTIME_EPOCH END_EPOCH
         QTIME_EPOCH=$(date -d "$QTIME" +%s 2>/dev/null || true)
-        NOW_EPOCH=$(date +%s)
-        if [[ -n "$QTIME_EPOCH" ]]; then
-            DIFF=$(( NOW_EPOCH - QTIME_EPOCH ))
-            DAYS=$(( DIFF / 86400 ))
-            HOURS=$(( (DIFF % 86400) / 3600 ))
-            MINS=$(( (DIFF % 3600) / 60 ))
-            echo "  Time in queue:      ${DAYS}d ${HOURS}h ${MINS}m (since ${QTIME})"
+        if [[ -n "$STIME" ]]; then
+            END_EPOCH=$(date -d "$STIME" +%s 2>/dev/null || true)
+            TOTAL_REF="submit→start"
         else
-            echo "  Time in queue:      could not parse qtime '${QTIME}'"
+            END_EPOCH=$(date +%s)
+            TOTAL_REF="submit→now"
+        fi
+        if [[ -n "$QTIME_EPOCH" && -n "$END_EPOCH" ]]; then
+            TOTAL_S=$(( END_EPOCH - QTIME_EPOCH ))
+            (( TOTAL_S < 0 )) && TOTAL_S=0
+            echo "  Total queue time:    $(format_duration "$TOTAL_S") (${TOTAL_REF}, since ${QTIME})"
+        else
+            echo "  Total queue time:    could not parse qtime '${QTIME}'"
+        fi
+    fi
+
+    # Eligible queue time = time PBS counted toward score accrual.
+    # (`eligible_time` from qstat -f.)
+    local ELIG_S=""
+    if [[ -n "$ETIME" ]]; then
+        ELIG_S=$(parse_pbs_duration "$ETIME")
+        if [[ -n "$ELIG_S" ]]; then
+            echo "  Eligible queue time: $(format_duration "$ELIG_S")"
+        else
+            echo "  Eligible queue time: could not parse eligible_time '${ETIME}'"
+        fi
+    fi
+
+    # Non-accruing time = total − eligible. Time the scheduler did not
+    # credit toward score (holds, dependency waits, etc.).
+    if [[ -n "$TOTAL_S" && -n "$ELIG_S" ]]; then
+        local NA_S PCT
+        NA_S=$(( TOTAL_S - ELIG_S ))
+        (( NA_S < 0 )) && NA_S=0
+        if (( TOTAL_S > 0 )); then
+            PCT=$(awk -v na="$NA_S" -v tot="$TOTAL_S" 'BEGIN { printf "%.1f", 100.0 * na / tot }')
+            echo "  Non-accruing time:   $(format_duration "$NA_S") (${PCT}% of total)"
+        else
+            echo "  Non-accruing time:   $(format_duration "$NA_S")"
         fi
     fi
 
     if [[ -n "$COMMENT" ]]; then
-        echo "  Comment:            ${COMMENT}"
+        echo "  Comment:             ${COMMENT}"
     fi
 }
 

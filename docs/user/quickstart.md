@@ -151,6 +151,9 @@ pbs-monitor analyze usage-insights -d 30 -o ./plots
 # Diagnose a slow-accruing job: plot its score over time against
 # comparable finished jobs (same queue, same node/walltime bin)
 pbs-monitor analyze score-trajectory <job_id> -d 30
+
+# Suggest a better shape (bundle or change walltime) for a slow job
+pbs-monitor analyze shape-recommend <job_id> -d 30
 ```
 
 ## Visualization
