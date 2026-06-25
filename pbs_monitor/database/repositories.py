@@ -225,28 +225,30 @@ class JobRepository(BaseRepository):
                 JobHistory.priority,
                 JobHistory.execution_node,
                 JobHistory.queue,
+                JobHistory.score,
                 JobHistory.timestamp,
                 func.row_number().over(
                     partition_by=JobHistory.job_id,
                     order_by=JobHistory.timestamp.desc()
                 ).label('rn')
             ).subquery()
-            
+
             # Get only the most recent entries (rn = 1)
             latest_entries = session.query(subquery).filter(subquery.c.rn == 1).all()
-            
+
             # Convert to JobStateInfo objects
             result = {}
             for entry in latest_entries:
                 # Convert database JobState enum to PBSJob JobState enum
                 from ..models.job import JobState as PBSJobState
                 pbs_state = PBSJobState(entry.state.value)
-                
+
                 result[entry.job_id] = JobStateInfo(
                     state=pbs_state,
                     priority=entry.priority or 0,
                     execution_node=entry.execution_node,
-                    queue=entry.queue or ''
+                    queue=entry.queue or '',
+                    score=entry.score,
                 )
             
             return result
@@ -297,13 +299,21 @@ class JobRepository(BaseRepository):
 
 class JobStateInfo:
     """Information about a job's current state"""
-    
-    def __init__(self, state: JobState, priority: int, execution_node: Optional[str], queue: str):
+
+    # A queued job's score drifts continuously as eligible_time accrues, so
+    # exact-equality on score would spam job_history with a row per poll.
+    # Fire only when the relative change exceeds this threshold (10%), which
+    # keeps the trajectory readable without exploding row counts.
+    SCORE_CHANGE_THRESHOLD = 0.10
+
+    def __init__(self, state: JobState, priority: int, execution_node: Optional[str],
+                 queue: str, score: Optional[float] = None):
         self.state = state
         self.priority = priority
         self.execution_node = execution_node
         self.queue = queue
-    
+        self.score = score
+
     @classmethod
     def from_job(cls, job: Job) -> 'JobStateInfo':
         """Create from job object"""
@@ -313,7 +323,7 @@ class JobStateInfo:
             execution_node=job.execution_node,
             queue=job.queue
         )
-    
+
     @classmethod
     def from_pbs_job(cls, job: 'PBSJob') -> 'JobStateInfo':
         """Create from PBSJob object"""
@@ -321,16 +331,29 @@ class JobStateInfo:
             state=job.state,
             priority=job.priority,
             execution_node=job.execution_node,
-            queue=job.queue
+            queue=job.queue,
+            score=job.score,
         )
-    
-    def has_changes(self, job: Job) -> bool:
-        """Check if job has state changes"""
+
+    def _score_changed(self, new_score: Optional[float]) -> bool:
+        old = self.score
+        if old is None and new_score is None:
+            return False
+        if old is None or new_score is None:
+            return True
+        # Relative threshold against the prior score, with a small floor so a
+        # cached 0 doesn't make any non-zero score look "infinitely larger".
+        denom = max(abs(old), 1.0)
+        return abs(new_score - old) > self.SCORE_CHANGE_THRESHOLD * denom
+
+    def has_changes(self, job: 'PBSJob') -> bool:
+        """Check if job has state changes worth recording in history."""
         return (
             self.state != job.state or
             self.priority != job.priority or
             self.execution_node != job.execution_node or
-            self.queue != job.queue
+            self.queue != job.queue or
+            self._score_changed(job.score)
         )
 
 

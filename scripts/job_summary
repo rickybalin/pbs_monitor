@@ -25,6 +25,29 @@ format_duration() {
     }'
 }
 
+get_job_score() {
+    # Compute the PBS scheduler score for a job by delegating to the
+    # pbs_monitor package's formula evaluator (the same one used by the
+    # `pbs-monitor` CLI). The score depends on the site-specific
+    # job_sort_formula and the server's resource defaults, so reproducing
+    # it in awk would mean baking those into this script.
+    # Prints the score (formatted) on success, nothing on failure.
+    local job_id="$1"
+    local script_dir
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    PBS_MONITOR_REPO="${script_dir}/.." python3 - "$job_id" 2>/dev/null <<'PY' || true
+import os, sys
+sys.path.insert(0, os.path.abspath(os.environ["PBS_MONITOR_REPO"]))
+try:
+    from pbs_monitor.pbs_commands import PBSCommands
+    jobs = PBSCommands().qstat_jobs(job_id=sys.argv[1])
+    if jobs and jobs[0].score is not None:
+        print(f"{jobs[0].score:.2f}")
+except Exception:
+    pass
+PY
+}
+
 parse_pbs_duration() {
     # Accepts PBS duration strings in HH:MM:SS or DD:HH:MM:SS form and
     # prints the total in seconds.
@@ -90,6 +113,12 @@ summarize_job() {
     echo "  Queue:               ${QUEUE:-unknown}"
     echo "  Job size:            ${NODECT:-unknown} node(s)"
     echo "  Requested walltime:  ${WALLTIME:-unknown}"
+
+    local SCORE
+    SCORE=$(get_job_score "$JOB_ID")
+    if [[ -n "$SCORE" ]]; then
+        echo "  Score:               ${SCORE}"
+    fi
 
     # Total queue time = (start time or now) − submit time. Wall-clock
     # duration the job has spent in the queue.
