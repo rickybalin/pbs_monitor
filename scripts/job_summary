@@ -97,7 +97,7 @@ summarize_job() {
         printf '%s\n' "$JOINED" | grep -F "    ${key} = " | sed "s/^    ${key} = //"
     }
 
-    local JOB_NAME JOB_STATE QUEUE NODECT WALLTIME QTIME STIME ETIME COMMENT
+    local JOB_NAME JOB_STATE QUEUE NODECT WALLTIME QTIME STIME ETIME DEPEND COMMENT
     JOB_NAME=$(get_field "Job_Name")
     JOB_STATE=$(get_field "job_state")
     QUEUE=$(get_field "queue")
@@ -106,6 +106,7 @@ summarize_job() {
     QTIME=$(get_field "qtime")
     STIME=$(get_field "stime")
     ETIME=$(get_field "eligible_time")
+    DEPEND=$(get_field "depend")
     COMMENT=$(get_field "comment")
 
     echo "Job ${JOB_ID}: ${JOB_NAME}"
@@ -167,6 +168,10 @@ summarize_job() {
         else
             echo "  Non-accruing time:   $(format_duration "$NA_S")"
         fi
+    fi
+
+    if [[ -n "$DEPEND" ]]; then
+        echo "  Dependencies:        ${DEPEND}"
     fi
 
     if [[ -n "$COMMENT" ]]; then
