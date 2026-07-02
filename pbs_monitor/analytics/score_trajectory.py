@@ -45,13 +45,21 @@ class ScoreTrajectoryAnalyzer:
       # Reuse bins from RunScoreAnalyzer so we don't drift
       self._run_score = RunScoreAnalyzer(repository_factory=self.repo_factory)
 
-   def analyze_jobs(self, job_ids: List[str], days: int = 30) -> List[Dict[str, Any]]:
+   def analyze_jobs(self, job_ids: List[str], days: int = 30,
+                    node_range: Optional[Tuple[int, int]] = None,
+                    walltime_range: Optional[Tuple[float, float]] = None
+                    ) -> List[Dict[str, Any]]:
       """
       Analyze score trajectory for one or more jobs.
 
       Args:
          job_ids: List of full job IDs
          days: Historical window (days) for comparable-job statistics
+         node_range: Optional (min, max) node count (inclusive) for the
+            comparable set. Overrides the default node bin for the target job.
+         walltime_range: Optional (min_hours, max_hours) walltime range
+            (inclusive) for the comparable set. Overrides the default
+            walltime bin for the target job.
 
       Returns:
          List of per-job result dicts with keys:
@@ -72,7 +80,8 @@ class ScoreTrajectoryAnalyzer:
             try:
                results.append(
                   self._analyze_single_job(session, job_id, cutoff_date,
-                                          server_data, server_defaults)
+                                          server_data, server_defaults,
+                                          node_range, walltime_range)
                )
             except Exception as e:
                self.logger.error(f"Failed to analyze job {job_id}: {e}")
@@ -87,7 +96,10 @@ class ScoreTrajectoryAnalyzer:
    def _analyze_single_job(self, session: Session, job_id: str,
                            cutoff_date: datetime,
                            server_data: Optional[Dict[str, Any]],
-                           server_defaults: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+                           server_defaults: Optional[Dict[str, Any]],
+                           node_range: Optional[Tuple[int, int]] = None,
+                           walltime_range: Optional[Tuple[float, float]] = None
+                           ) -> Dict[str, Any]:
       job = session.query(Job).filter(Job.job_id == job_id).first()
       if not job:
          return {
@@ -98,8 +110,32 @@ class ScoreTrajectoryAnalyzer:
          }
 
       walltime_hours = self._run_score._parse_walltime_to_hours(job.walltime)
-      node_bin = self._run_score._categorize_by_nodes(job.nodes or 0)
-      walltime_bin = self._run_score._categorize_by_walltime(walltime_hours)
+      # Default shape = target job's bins; custom range overrides the label
+      # shown in plots/summaries so the user sees what was actually compared.
+      if node_range is not None:
+         node_bin = f"{node_range[0]}-{node_range[1]}"
+      else:
+         node_bin = self._run_score._categorize_by_nodes(job.nodes or 0)
+      if walltime_range is not None:
+         node_wall_lo, node_wall_hi = walltime_range
+         walltime_bin = f"{node_wall_lo:g}-{node_wall_hi:g}hrs"
+      else:
+         walltime_bin = self._run_score._categorize_by_walltime(walltime_hours)
+
+      # Warn if the target job falls outside a user-supplied custom range —
+      # otherwise the "comparable" set doesn't actually include jobs like it.
+      if node_range is not None and job.nodes is not None:
+         if not (node_range[0] <= job.nodes <= node_range[1]):
+            self.logger.warning(
+               f"Job {job_id} has {job.nodes} nodes, outside custom range "
+               f"{node_range[0]}-{node_range[1]}"
+            )
+      if walltime_range is not None and walltime_hours is not None:
+         if not (walltime_range[0] <= walltime_hours <= walltime_range[1]):
+            self.logger.warning(
+               f"Job {job_id} walltime {walltime_hours:g}h is outside custom "
+               f"range {walltime_range[0]:g}-{walltime_range[1]:g}h"
+            )
 
       # Score trajectory from job_history (each row carries state too)
       trajectory = self._get_trajectory(session, job_id)
@@ -111,10 +147,11 @@ class ScoreTrajectoryAnalyzer:
       # score (holds, dependency waits, etc.) — usually dominated by holds.
       non_accruing = self._compute_non_accruing(job)
 
-      # Comparable finished jobs: same queue + same shape bin
+      # Comparable finished jobs: same queue + same shape bin (or custom range)
       comparable_stats = self._get_comparable_stats(
          session, cutoff_date, job.queue, node_bin, walltime_bin,
-         server_data, server_defaults
+         server_data, server_defaults,
+         node_range=node_range, walltime_range=walltime_range,
       )
 
       projected_start = None
@@ -199,10 +236,16 @@ class ScoreTrajectoryAnalyzer:
    def _get_comparable_stats(self, session: Session, cutoff_date: datetime,
                              queue: Optional[str], node_bin: str, walltime_bin: str,
                              server_data: Optional[Dict[str, Any]],
-                             server_defaults: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+                             server_defaults: Optional[Dict[str, Any]],
+                             node_range: Optional[Tuple[int, int]] = None,
+                             walltime_range: Optional[Tuple[float, float]] = None
+                             ) -> Dict[str, Any]:
       """
       Compute run-score and queue-time stats for finished jobs in the same
       queue and the same node/walltime shape bin.
+
+      When node_range or walltime_range is supplied, the corresponding
+      default bin filter is replaced by an inclusive raw-range check.
       """
       empty = {
          'n_comparable': 0,
@@ -232,8 +275,17 @@ class ScoreTrajectoryAnalyzer:
          try:
             fj_nodes = fj.nodes or 0
             fj_wall = self._run_score._parse_walltime_to_hours(fj.walltime)
-            if (self._run_score._categorize_by_nodes(fj_nodes) != node_bin
-                  or self._run_score._categorize_by_walltime(fj_wall) != walltime_bin):
+
+            if node_range is not None:
+               if not (node_range[0] <= fj_nodes <= node_range[1]):
+                  continue
+            elif self._run_score._categorize_by_nodes(fj_nodes) != node_bin:
+               continue
+
+            if walltime_range is not None:
+               if not (walltime_range[0] <= fj_wall <= walltime_range[1]):
+                  continue
+            elif self._run_score._categorize_by_walltime(fj_wall) != walltime_bin:
                continue
 
             # Q→R score: prefer recomputation from raw_pbs_data, fall back
@@ -434,23 +486,22 @@ class ScoreTrajectoryAnalyzer:
       title = f"{res['job_id']} — queue={res.get('queue', '?')}, {shape}  {bin_lbl}"
       ax.set_title(title, fontsize=12)
 
-      # Anchor x-axis to the wall-clock queue lifetime (submit_time → now,
-      # or submit_time → start_time for jobs that already started). This
-      # is the only span every job is guaranteed to have data for, even if
-      # `eligible_time` is 0 or the trajectory is a single snapshot
-      # (otherwise matplotlib auto-fits a default multi-year window around
-      # the lone point). The projected-start line may legitimately fall
-      # outside this window — that's fine; it's shown in the legend.
-      # A small symmetric buffer (~5% of the span) keeps endpoint markers
-      # off the axis spines.
+      # Anchor x-axis from submit_time − 1 day to max(today, projected_start) + 1 day.
+      # This keeps the projected-start marker inside the frame while still
+      # showing the full queue lifetime with a symmetric one-day buffer.
       submit_t = res.get('submit_time')
       if submit_t is not None:
          end_t = datetime.now()
-         if trajectory:
-            end_t = max(end_t, max(t for (t, _, _) in trajectory))
-         span = end_t - submit_t
-         pad = max(span * 0.05, timedelta(minutes=10))
-         ax.set_xlim(submit_t - pad, end_t + pad)
+         projected = res.get('projected_start')
+         if projected is not None:
+            end_t = max(end_t, projected)
+         ax.set_xlim(submit_t - timedelta(days=1), end_t + timedelta(days=1))
+
+      # Y-axis: 0 up to mean Q→R score + 1 std, when we have comparable jobs.
+      if res.get('mean_run_score') is not None:
+         mean = float(res['mean_run_score'])
+         std = float(res.get('std_run_score') or 0.0)
+         ax.set_ylim(0, mean + std)
 
       # Non-accruing time text box (wall-clock queue − eligible_time)
       na = res.get('non_accruing') or {}

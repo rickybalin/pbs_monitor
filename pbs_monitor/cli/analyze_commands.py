@@ -587,6 +587,30 @@ class AnalyzeCommand(BaseCommand):
             return None
          return match_ids[0]
 
+   def _parse_range(self, raw: Optional[str], value_type, label: str):
+      """
+      Parse a 'min-max' string into a (min, max) tuple, or None if unset.
+
+      Raises ValueError with a user-facing message on malformed input so
+      the caller can surface the exact --flag that failed.
+      """
+      if raw is None:
+         return None
+      raw = raw.strip()
+      if not raw:
+         return None
+      if '-' not in raw:
+         raise ValueError(f"{label} must be MIN-MAX (got '{raw}')")
+      lo_s, hi_s = raw.split('-', 1)
+      try:
+         lo = value_type(lo_s.strip())
+         hi = value_type(hi_s.strip())
+      except ValueError as e:
+         raise ValueError(f"{label} has non-numeric bounds ('{raw}'): {e}")
+      if lo > hi:
+         raise ValueError(f"{label} min > max ({lo} > {hi})")
+      return (lo, hi)
+
    def _analyze_score_trajectory(self, args: argparse.Namespace) -> int:
       """Plot score-over-time for specific jobs with comparable-job overlays."""
       import os
@@ -611,12 +635,27 @@ class AnalyzeCommand(BaseCommand):
          if not job_ids:
             return 1
 
-         self.console.print(
-            f"[bold blue]Analyzing score trajectory for {len(job_ids)} job(s) "
-            f"(comparable window: last {days} days)...[/bold blue]"
+         node_range = self._parse_range(
+            getattr(args, 'node_range', None), value_type=int, label='--node-range'
+         )
+         walltime_range = self._parse_range(
+            getattr(args, 'walltime_range', None), value_type=float, label='--walltime-range'
          )
 
-         results = analyzer.analyze_jobs(job_ids, days=days)
+         shape_desc = ""
+         if node_range is not None:
+            shape_desc += f", nodes={node_range[0]}-{node_range[1]}"
+         if walltime_range is not None:
+            shape_desc += f", walltime={walltime_range[0]:g}-{walltime_range[1]:g}h"
+         self.console.print(
+            f"[bold blue]Analyzing score trajectory for {len(job_ids)} job(s) "
+            f"(comparable window: last {days} days{shape_desc})...[/bold blue]"
+         )
+
+         results = analyzer.analyze_jobs(
+            job_ids, days=days,
+            node_range=node_range, walltime_range=walltime_range,
+         )
 
          # Warn about missing or trivially-empty cases
          for r in results:

@@ -450,6 +450,18 @@ Examples:
       action="store_true",
       help="Skip plot generation, print summary only"
    )
+   score_traj_parser.add_argument(
+      "--node-range",
+      metavar="MIN-MAX",
+      help="Custom node-count range for the comparable set (inclusive), "
+           "e.g. '128-200'. Overrides the default node bin."
+   )
+   score_traj_parser.add_argument(
+      "--walltime-range",
+      metavar="MIN-MAX",
+      help="Custom walltime range in hours for the comparable set (inclusive), "
+           "e.g. '5-7' or '0.5-2'. Overrides the default walltime bin."
+   )
 
    # Analyze shape-recommend
    shape_rec_parser = analyze_subparsers.add_parser(
